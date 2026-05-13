@@ -1,5 +1,9 @@
 import { describe, it } from 'vitest';
-import { FlightRecorder, type ImpressionEvent } from './flight-recorder.js';
+import {
+  FlightRecorder,
+  type ImpressionEvent,
+  type CustomEvent,
+} from './flight-recorder.js';
 
 describe('FlightRecorder', () => {
   it('records an impression', () => {
@@ -10,6 +14,18 @@ describe('FlightRecorder', () => {
       context: { userId: 'u-42', sessionId: 's-7' },
       enabled: true,
       featureName: 'demo.flag',
+    };
+    recorder.record(event);
+  });
+
+  it('records a custom event', () => {
+    const recorder = new FlightRecorder();
+    const event: CustomEvent = {
+      eventType: 'custom',
+      eventId: '22222222-2222-4222-8222-222222222222',
+      context: { userId: 'u-42' },
+      name: 'signup',
+      payload: { plan: 'pro' },
     };
     recorder.record(event);
   });

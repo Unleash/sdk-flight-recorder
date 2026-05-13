@@ -8,6 +8,14 @@ export type ImpressionEvent = {
   impressionData?: boolean;
 };
 
+export type CustomEvent = {
+  eventType: 'custom';
+  eventId: string;
+  context: Record<string, unknown>;
+  name: string;
+  payload?: unknown;
+};
+
 export class FlightRecorder {
-  record(_event: ImpressionEvent): void {}
+  record(_event: ImpressionEvent | CustomEvent): void {}
 }

@@ -5,9 +5,14 @@ import {
   type CustomEvent,
 } from './flight-recorder.js';
 
+const unusedFetch: typeof fetch = async () => new Response();
+
 describe('FlightRecorder', () => {
   it('records an impression', () => {
-    const recorder = new FlightRecorder({ url: 'https://example/events' });
+    const recorder = new FlightRecorder({
+      url: 'https://example/events',
+      fetch: unusedFetch,
+    });
     const event: ImpressionEvent = {
       eventType: 'isEnabled',
       eventId: '11111111-1111-4111-8111-111111111111',
@@ -19,7 +24,10 @@ describe('FlightRecorder', () => {
   });
 
   it('records a custom event', () => {
-    const recorder = new FlightRecorder({ url: 'https://example/events' });
+    const recorder = new FlightRecorder({
+      url: 'https://example/events',
+      fetch: unusedFetch,
+    });
     const event: CustomEvent = {
       eventType: 'custom',
       eventId: '22222222-2222-4222-8222-222222222222',
@@ -31,7 +39,10 @@ describe('FlightRecorder', () => {
   });
 
   it('can flush with no events', async () => {
-    const recorder = new FlightRecorder({ url: 'https://example/events' });
+    const recorder = new FlightRecorder({
+      url: 'https://example/events',
+      fetch: unusedFetch,
+    });
     await recorder.flush();
   });
 

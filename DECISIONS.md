@@ -16,9 +16,9 @@
 
 The recorder exposes one public ingest method, `record(event)`, not per-type methods (`recordImpression`, `recordCustom`, …). *Why:* the same call site will handle both Unleash impression events (`isEnabled` / `getVariant`) and arbitrary custom events. One method keeps the public surface small and lets the integrator decide the event type at the call site rather than choosing a method name.
 
-## Constructor options: required `url`, injectable `fetch`
+## Constructor options: explicit DI for `url` and `fetch`
 
-`new FlightRecorder({ url, fetch? })`. `url` is required (no point shipping events without a destination); `fetch` is optional and defaults to `globalThis.fetch`. *Why:* production callers in FE (admin UI) and BE (Cloud) both have a native `fetch` and shouldn't have to pass it explicitly. Tests inject a fake fetch to assert HTTP behavior without a real network — this is the only DI we need so far, no transport abstraction yet.
+`new FlightRecorder({ url, fetch })`. Both required, no defaults. *Why:* an optional `fetch` with a `?? globalThis.fetch` fallback is the *bastard injection* antipattern — it hides the dependency, makes the class's runtime requirements invisible from its signature, and creates a class of bugs where a test or environment accidentally relies on the global instead of the intended injection. Production callers pass `globalThis.fetch` (or whatever wrapper they have) explicitly; tests pass a fake. Same shape, no hidden ambient state.
 
 ## Wire format: POST + NDJSON
 

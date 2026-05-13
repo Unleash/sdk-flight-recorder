@@ -20,7 +20,7 @@ export type CustomEvent = {
 
 export type FlightRecorderOptions = {
   url: string;
-  fetch?: typeof fetch;
+  fetch: typeof fetch;
 };
 
 export class FlightRecorder {
@@ -30,7 +30,7 @@ export class FlightRecorder {
 
   constructor(options: FlightRecorderOptions) {
     this.url = options.url;
-    this.fetch = options.fetch ?? globalThis.fetch;
+    this.fetch = options.fetch;
   }
 
   record(event: ImpressionEvent | CustomEvent): void {

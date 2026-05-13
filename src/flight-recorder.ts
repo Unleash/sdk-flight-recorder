@@ -18,4 +18,6 @@ export type CustomEvent = {
 
 export class FlightRecorder {
   record(_event: ImpressionEvent | CustomEvent): void {}
+
+  async flush(): Promise<void> {}
 }

@@ -29,4 +29,9 @@ describe('FlightRecorder', () => {
     };
     recorder.record(event);
   });
+
+  it('can flush with no events', async () => {
+    const recorder = new FlightRecorder();
+    await recorder.flush();
+  });
 });

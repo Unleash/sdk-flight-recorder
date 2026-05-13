@@ -16,6 +16,18 @@
 
 The recorder exposes one public ingest method, `record(event)`, not per-type methods (`recordImpression`, `recordCustom`, …). *Why:* the same call site will handle both Unleash impression events (`isEnabled` / `getVariant`) and arbitrary custom events. One method keeps the public surface small and lets the integrator decide the event type at the call site rather than choosing a method name.
 
+## Constructor options: required `url`, injectable `fetch`
+
+`new FlightRecorder({ url, fetch? })`. `url` is required (no point shipping events without a destination); `fetch` is optional and defaults to `globalThis.fetch`. *Why:* production callers in FE (admin UI) and BE (Cloud) both have a native `fetch` and shouldn't have to pass it explicitly. Tests inject a fake fetch to assert HTTP behavior without a real network — this is the only DI we need so far, no transport abstraction yet.
+
+## Wire format: POST + NDJSON
+
+`flush()` sends `POST <url>` with a body of newline-delimited JSON — one event per line, trailing newline. *Why:* NDJSON lets the ingestion server stream-parse one line at a time instead of blocking the event loop on a single big `JSON.parse` of a batch, and it maps directly to ClickHouse's `JSONEachRow` input format. For a single-event flush it's just `JSON.stringify(event) + '\n'`; for a batch the same shape extends naturally.
+
+## Drain the buffer before awaiting the send
+
+`flush()` calls `buffer.splice(0)` to take an atomic snapshot of pending events *before* awaiting `fetch`. *Why:* any `record(...)` call that happens during the in-flight `fetch` must not be cleared along with the events that were already in flight. Clearing the buffer *after* the await (`buffer.length = 0`) silently drops everything recorded during the network round-trip — confirmed by test `'events recorded during an in-flight flush survive the flush'`.
+
 ## Test names describe observable behavior
 
 Test names state the user-facing behavior, not the return-value or assertion mechanics. Good: `'can flush with no events'`. Bad: `'flush resolves on an empty recorder'`. *Why:* a test name should read like a feature description so failure listings communicate intent at a glance; mechanics (promise resolution, no-throw, return shape) belong inside the test body, not in its name.

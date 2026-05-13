@@ -16,8 +16,29 @@ export type CustomEvent = {
   payload?: unknown;
 };
 
-export class FlightRecorder {
-  record(_event: ImpressionEvent | CustomEvent): void {}
+export type FlightRecorderOptions = {
+  url: string;
+  fetch?: typeof fetch;
+};
 
-  async flush(): Promise<void> {}
+export class FlightRecorder {
+  private readonly url: string;
+  private readonly fetch: typeof fetch;
+  private readonly buffer: Array<ImpressionEvent | CustomEvent> = [];
+
+  constructor(options: FlightRecorderOptions) {
+    this.url = options.url;
+    this.fetch = options.fetch ?? globalThis.fetch;
+  }
+
+  record(event: ImpressionEvent | CustomEvent): void {
+    this.buffer.push(event);
+  }
+
+  async flush(): Promise<void> {
+    if (this.buffer.length === 0) return;
+    const toSend = this.buffer.splice(0);
+    const body = toSend.map((e) => JSON.stringify(e)).join('\n') + '\n';
+    await this.fetch(this.url, { method: 'POST', body });
+  }
 }

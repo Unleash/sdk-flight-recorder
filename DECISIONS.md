@@ -63,3 +63,7 @@ The only retry knob is `retry: { retries: number }` (opt-in; default 0 = no retr
 ## `onError` carries `droppedEventCount`, not the events themselves
 
 The `persistentFailure` payload exposes `droppedEventCount: number`, not the full `events: Event[]` array (which the reference design includes). *Why:* the buffer can hold thousands of events; passing them to a user-supplied callback retains the whole batch in memory until the callback returns and risks long-lived references in observability code. A count is enough for the dominant use case (metrics, alerting). Callers who need event-level forensics can capture the events themselves via a custom `fetch` wrapper that logs request bodies — that's the right seam.
+
+## HTTP transport extracted to `src/http-client.ts`
+
+`createHttpClient({ url, headers, fetch, retries }): HttpClient` lives in its own module; `HttpClient` exposes a single `post(body: string): Promise<void>`. `FlightRecorder` no longer touches `ky` directly — it builds the client once in its constructor and calls `httpClient.post(body)` from `flush()`. *Why:* the recorder's job is buffering, serialization, and observability; the HTTP transport (ky config, retry knobs, header set, fetch DI) is a separable concern. Bonus: the ky instance is built once at construction instead of being re-created on every `flush()`. The recorder's public options (`url`, `clientKey`, `fetch`, `retry`) are unchanged — the recorder still owns the option surface; only the *internal* coupling to ky moved.

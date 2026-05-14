@@ -8,10 +8,13 @@ Last updated: 2026-05-14
 
 `src/flight-recorder.ts`
 - `FlightRecorder` with explicit DI: `{ url, clientKey, fetch, scheduler, batch?, retry?, onError? }`. Collaborators required (no defaults); `batch`, `retry?: { retries }`, `onError` opt-in. Only retry knob is `retries` — backoff/cap/status-codes/timeout all use ky's defaults.
-- Constructor schedules a periodic flush via `scheduler.runEvery(flushAfterMs, flushCb)` when `flushAfterMs` is set. Single loop, not per-batch timer (diverges from reference design — see memory).
+- Constructor builds an `HttpClient` once (via `createHttpClient` from `http-client.ts`) and schedules a periodic flush via `scheduler.runEvery(flushAfterMs, flushCb)` when `flushAfterMs` is set.
 - `record(event: ImpressionEvent | CustomEvent)` — pushes to internal buffer; fires `void this.flush()` when `buffer.length >= batch.flushAt` (if configured).
-- `async flush()` — early-return on empty buffer; atomic snapshot via `buffer.splice(0)`; serializes via `toNdjson`; POSTs via `ky` configured with `retry`/`timeout`/exponential backoff and our injected `fetch`. Exhausted retries fire `onError({ reason: 'persistentFailure', droppedEventCount, error: NetworkError | HTTPError })`; `flush()` never rejects.
+- `async flush()` — early-return on empty buffer; atomic snapshot via `buffer.splice(0)`; serializes via `toNdjson`; sends via `httpClient.post(body)`. Exhausted retries fire `onError({ reason: 'persistentFailure', droppedEventCount, error: NetworkError | HTTPError })`; `flush()` never rejects.
 - Types: `ImpressionEvent` (discriminated by `eventType: 'isEnabled' | 'getVariant'`), `CustomEvent` (`eventType: 'custom'`), `ErrorInfo` (currently single variant), `FlightRecorderOptions` (nested `batch?: { flushAt?, flushAfterMs? }`, `retry?: { retries }`).
+
+`src/http-client.ts`
+- `createHttpClient({ url, headers, fetch, retries }): HttpClient`. Single method: `post(body: string): Promise<void>`. Wraps ky (retry/methods/headers/fetch). The only module that imports `ky`.
 
 `src/scheduler.ts`
 - `Scheduler = { runEvery(ms, handler): void }`. Single periodic-tick abstraction; no `now`/`setTimeout`/`clearTimeout`. No production impl yet — production callers must provide one.

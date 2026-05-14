@@ -1,4 +1,4 @@
-import ky from 'ky';
+import { createHttpClient, type HttpClient } from './http-client.js';
 import type { Scheduler } from './scheduler.js';
 import { toNdjson } from './ndjson.js';
 
@@ -42,24 +42,26 @@ export type FlightRecorderOptions = {
 };
 
 export class FlightRecorder {
-    private readonly url: string;
-    private readonly clientKey: string;
-    private readonly fetch: typeof fetch;
+    private readonly httpClient: HttpClient;
     private readonly scheduler: Scheduler;
     private readonly flushAt: number | undefined;
     private readonly flushAfterMs: number | undefined;
-    private readonly retries: number;
     private readonly onError: ((info: ErrorInfo) => void) | undefined;
     private readonly buffer: Array<ImpressionEvent | CustomEvent> = [];
 
     constructor(options: FlightRecorderOptions) {
-        this.url = options.url;
-        this.clientKey = options.clientKey;
-        this.fetch = options.fetch;
+        this.httpClient = createHttpClient({
+            url: options.url,
+            headers: {
+                'content-type': 'application/ndjson',
+                authorization: options.clientKey,
+            },
+            fetch: options.fetch,
+            retries: options.retry?.retries ?? 0,
+        });
         this.scheduler = options.scheduler;
         this.flushAt = options.batch?.flushAt;
         this.flushAfterMs = options.batch?.flushAfterMs;
-        this.retries = options.retry?.retries ?? 0;
         this.onError = options.onError;
         if (this.flushAfterMs !== undefined) {
             this.scheduler.runEvery(this.flushAfterMs, () => {
@@ -79,22 +81,8 @@ export class FlightRecorder {
         if (this.buffer.length === 0) return;
         const toSend = this.buffer.splice(0);
         const body = toNdjson(toSend);
-
-        const client = ky.create({
-            fetch: this.fetch,
-            retry: {
-                limit: this.retries,
-                methods: ['post'],
-            },
-            headers: {
-                'content-type': 'application/ndjson',
-                authorization: this.clientKey,
-            },
-            body,
-        });
-
         try {
-            await client.post(this.url);
+            await this.httpClient.post(body);
         } catch (err) {
             this.onError?.({
                 reason: 'persistentFailure',

@@ -214,34 +214,7 @@ describe('FlightRecorder', () => {
         expect(fetchCalls).toBe(1);
     });
 
-    it('retries the failed fetch after one attempt and then succeeds', async () => {
-        let attemptCount = 0;
-        const fakeFetch: typeof fetch = async () => {
-            attemptCount++;
-            if (attemptCount === 1) throw new TypeError('Failed to fetch');
-            return new Response();
-        };
-        const errors: ErrorInfo[] = [];
-
-        const recorder = createRecorder({
-            fetch: fakeFetch,
-            retry: { retries: 1 },
-            onError: (info) => errors.push(info),
-        });
-        recorder.record({
-            eventType: 'isEnabled',
-            eventId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
-            context: {},
-            enabled: true,
-            featureName: 'retry-test',
-        });
-        await recorder.flush();
-
-        expect(attemptCount).toBe(2);
-        expect(errors).toEqual([]);
-    });
-
-    it('invokes onError when all retry attempts fail', async () => {
+    it('invokes onError when the transport fails', async () => {
         const fakeFetch: typeof fetch = async () => {
             throw new TypeError('Failed to fetch');
         };
@@ -249,7 +222,6 @@ describe('FlightRecorder', () => {
 
         const recorder = createRecorder({
             fetch: fakeFetch,
-            retry: { retries: 1 },
             onError: (info) => errors.push(info),
         });
         const event: ImpressionEvent = {

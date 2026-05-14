@@ -25,9 +25,9 @@ Last updated: 2026-05-14
 `src/ndjson.ts`
 - `toNdjson(items: ReadonlyArray<unknown>): string` — generic NDJSON serializer. One JSON object per line, trailing `\n`. Returns `''` for empty input (the recorder's `flush` already guards against calling it that way, but the function handles it safely).
 
-## Tests (10 passing)
+## Tests (10 passing, ~26ms total)
 
-`src/flight-recorder.test.ts`
+`src/flight-recorder.test.ts` (8 tests, ~14ms — no ky backoff at this seam)
 1. `'records an impression'` — `record()` accepts an `ImpressionEvent`
 2. `'records a custom event'` — `record()` accepts a `CustomEvent`
 3. `'can flush with no events'` — empty-buffer guard
@@ -35,10 +35,12 @@ Last updated: 2026-05-14
 5. `'an event recorded mid-flush is sent on the next flush'` — atomicity: events recorded during an in-flight `fetch` are preserved for the next flush
 6. `'flushes automatically when the buffer reaches the configured size'` — size-based auto-flush via `batch.flushAt`. Counts `fetch` calls before/after threshold
 7. `'flushes automatically after the configured time elapses'` — time-based auto-flush via periodic `scheduler.runEvery(flushAfterMs, ...)`. Counts `fetch` calls before/after `scheduler.advance(flushAfterMs)`
-8. `'retries the failed fetch after one attempt and then succeeds'` — ky retries on `TypeError('Failed to fetch')` (ky's network-error detection). Asserts fetch was called twice and that `onError` was not called
-9. `'invokes onError when all retry attempts fail'` — exhausted retries fire `onError({ reason: 'persistentFailure', droppedEventCount, error: NetworkError })`. `flush()` itself does not reject
+8. `'invokes onError when the transport fails'` — `fakeFetch` throws once, `retry: { retries: 0 }`, asserts `onError` called with `{ reason: 'persistentFailure', droppedEventCount: 1 }` and that an `error` is attached. Does not assert error type — that's ky's concern.
 
-`src/ndjson.test.ts`
+`src/http-client.test.ts` (1 test, ~10ms — backoff bypassed via `retryDelay: () => 0`)
+9. `'retries POST requests when retries is configured'` — verifies our two retry choices flow through to ky: `limit: options.retries` and `methods: ['post']` (POST is excluded from ky's default retry list). Fake fetch throws once, then succeeds; asserts fetch called twice.
+
+`src/ndjson.test.ts` (1 test)
 10. `'emits one JSON object per line with a trailing newline'`
 
 Test conveniences in `flight-recorder.test.ts`:

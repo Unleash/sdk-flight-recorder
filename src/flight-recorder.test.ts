@@ -242,4 +242,24 @@ describe('FlightRecorder', () => {
             },
         ]);
     });
+
+    it('flushes pending events on close', async () => {
+        let fetchCalls = 0;
+        const fakeFetch: typeof fetch = async () => {
+            fetchCalls++;
+            return new Response();
+        };
+        const recorder = createRecorder({ fetch: fakeFetch });
+
+        recorder.record({
+            eventType: 'isEnabled',
+            eventId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+            context: {},
+            enabled: true,
+            featureName: 'closing-flag',
+        });
+        await recorder.close();
+
+        expect(fetchCalls).toBe(1);
+    });
 });

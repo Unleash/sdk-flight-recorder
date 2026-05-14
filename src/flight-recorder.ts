@@ -91,4 +91,8 @@ export class FlightRecorder {
             });
         }
     }
+
+    async close(): Promise<void> {
+        await this.flush();
+    }
 }

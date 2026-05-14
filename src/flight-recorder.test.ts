@@ -6,12 +6,14 @@ import {
 } from './flight-recorder.js';
 
 const unusedFetch: typeof fetch = async () => new Response();
+const unusedClientKey = 'unused-client-key';
 
 describe('FlightRecorder', () => {
   it('records an impression', () => {
     const recorder = new FlightRecorder({
       url: 'https://example/events',
       fetch: unusedFetch,
+      clientKey: unusedClientKey,
     });
     const event: ImpressionEvent = {
       eventType: 'isEnabled',
@@ -27,6 +29,7 @@ describe('FlightRecorder', () => {
     const recorder = new FlightRecorder({
       url: 'https://example/events',
       fetch: unusedFetch,
+      clientKey: unusedClientKey,
     });
     const event: CustomEvent = {
       eventType: 'custom',
@@ -42,6 +45,7 @@ describe('FlightRecorder', () => {
     const recorder = new FlightRecorder({
       url: 'https://example/events',
       fetch: unusedFetch,
+      clientKey: unusedClientKey,
     });
     await recorder.flush();
   });
@@ -67,6 +71,7 @@ describe('FlightRecorder', () => {
     const recorder = new FlightRecorder({
       url: 'https://example/events',
       fetch: fakeFetch,
+      clientKey: 'default:development.real-key-shape',
     });
     const event: ImpressionEvent = {
       eventType: 'isEnabled',
@@ -82,7 +87,10 @@ describe('FlightRecorder', () => {
       {
         url: 'https://example/events',
         method: 'POST',
-        headers: { 'Content-Type': 'application/ndjson' },
+        headers: {
+          'Content-Type': 'application/ndjson',
+          Authorization: 'default:development.real-key-shape',
+        },
         body: JSON.stringify(event) + '\n',
       },
     ]);
@@ -107,6 +115,7 @@ describe('FlightRecorder', () => {
     const recorder = new FlightRecorder({
       url: 'https://example/events',
       fetch: fakeFetch,
+      clientKey: unusedClientKey,
     });
     const before: ImpressionEvent = {
       eventType: 'isEnabled',

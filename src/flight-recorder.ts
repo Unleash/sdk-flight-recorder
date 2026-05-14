@@ -20,16 +20,19 @@ export type CustomEvent = {
 
 export type FlightRecorderOptions = {
   url: string;
+  clientKey: string;
   fetch: typeof fetch;
 };
 
 export class FlightRecorder {
   private readonly url: string;
+  private readonly clientKey: string;
   private readonly fetch: typeof fetch;
   private readonly buffer: Array<ImpressionEvent | CustomEvent> = [];
 
   constructor(options: FlightRecorderOptions) {
     this.url = options.url;
+    this.clientKey = options.clientKey;
     this.fetch = options.fetch;
   }
 
@@ -43,7 +46,10 @@ export class FlightRecorder {
     const body = toNdjson(toSend);
     await this.fetch(this.url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/ndjson' },
+      headers: {
+        'Content-Type': 'application/ndjson',
+        Authorization: this.clientKey,
+      },
       body,
     });
   }

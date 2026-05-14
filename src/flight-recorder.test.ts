@@ -45,6 +45,14 @@ const createRecorder = (overrides: Partial<FlightRecorderOptions> = {}) =>
         ...overrides,
     });
 
+const defaultImpressionEvent: ImpressionEvent = {
+    eventType: 'isEnabled',
+    eventId: '00000000-0000-4000-8000-000000000000',
+    context: {},
+    enabled: true,
+    featureName: 'default-flag',
+};
+
 describe('FlightRecorder', () => {
     it('records an impression', () => {
         const recorder = createRecorder();
@@ -127,20 +135,8 @@ describe('FlightRecorder', () => {
         };
 
         const recorder = createRecorder({ fetch: fakeFetch });
-        const before: ImpressionEvent = {
-            eventType: 'isEnabled',
-            eventId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-            context: {},
-            enabled: true,
-            featureName: 'before',
-        };
-        const during: ImpressionEvent = {
-            eventType: 'isEnabled',
-            eventId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-            context: {},
-            enabled: true,
-            featureName: 'during',
-        };
+        const before = { ...defaultImpressionEvent, featureName: 'before' };
+        const during = { ...defaultImpressionEvent, featureName: 'during' };
 
         recorder.record(before);
         const flushInFlight = recorder.flush();
@@ -167,23 +163,11 @@ describe('FlightRecorder', () => {
             batch: { flushAt: 2 },
         });
 
-        recorder.record({
-            eventType: 'isEnabled',
-            eventId: '11111111-1111-4111-8111-111111111111',
-            context: {},
-            enabled: true,
-            featureName: 'demo.flag1',
-        });
+        recorder.record(defaultImpressionEvent);
         await new Promise<void>((resolve) => setImmediate(resolve));
         expect(fetchCalls).toBe(0);
 
-        recorder.record({
-            eventType: 'isEnabled',
-            eventId: '11111111-1111-4111-8111-111111111111',
-            context: {},
-            enabled: true,
-            featureName: 'demo.flag2',
-        });
+        recorder.record(defaultImpressionEvent);
         await new Promise<void>((resolve) => setImmediate(resolve));
         expect(fetchCalls).toBe(1);
     });
@@ -201,13 +185,7 @@ describe('FlightRecorder', () => {
             batch: { flushAfterMs: 2000, flushAt: 2 },
         });
 
-        recorder.record({
-            eventType: 'isEnabled',
-            eventId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-            context: {},
-            enabled: true,
-            featureName: 'flag-time',
-        });
+        recorder.record(defaultImpressionEvent);
         expect(fetchCalls).toBe(0);
 
         scheduler.advance(2000);
@@ -226,14 +204,7 @@ describe('FlightRecorder', () => {
             fetch: fakeFetch,
             onError: (info) => errors.push(info),
         });
-        const event: ImpressionEvent = {
-            eventType: 'isEnabled',
-            eventId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
-            context: {},
-            enabled: true,
-            featureName: 'failing-flag',
-        };
-        recorder.record(event);
+        recorder.record(defaultImpressionEvent);
         await recorder.flush();
 
         expect(errors).toMatchObject([
@@ -257,13 +228,7 @@ describe('FlightRecorder', () => {
         });
 
         await recorder.close();
-        recorder.record({
-            eventType: 'isEnabled',
-            eventId: '99999999-9999-4999-8999-999999999999',
-            context: {},
-            enabled: true,
-            featureName: 'after-close',
-        });
+        recorder.record(defaultImpressionEvent);
         await recorder.flush();
         await new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -283,13 +248,7 @@ describe('FlightRecorder', () => {
             batch: { flushAfterMs: 2000 },
         });
 
-        recorder.record({
-            eventType: 'isEnabled',
-            eventId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
-            context: {},
-            enabled: true,
-            featureName: 'closing-flag',
-        });
+        recorder.record(defaultImpressionEvent);
         await recorder.close();
 
         expect(fetchCalls).toBe(1);

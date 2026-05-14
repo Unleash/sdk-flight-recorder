@@ -30,6 +30,7 @@ const snapshotRequest = async (req: Request): Promise<RequestSnapshot> => {
 const defaultUrl = 'https://example/events';
 const defaultFetch: typeof fetch = async () => new Response();
 const defaultClientKey = 'default-client-key';
+const defaultTimestamp = '2026-01-01 00:00:00.000';
 const defaultScheduler: Scheduler = {
     runEvery: () => {},
     stop: () => {},
@@ -48,6 +49,7 @@ const createRecorder = (overrides: Partial<FlightRecorderOptions> = {}) =>
 const defaultImpressionEvent: ImpressionEvent = {
     eventType: 'isEnabled',
     eventId: '00000000-0000-4000-8000-000000000000',
+    timestamp: defaultTimestamp,
     context: {},
     enabled: true,
     featureName: 'default-flag',
@@ -59,6 +61,7 @@ describe('FlightRecorder', () => {
         const event: ImpressionEvent = {
             eventType: 'isEnabled',
             eventId: '11111111-1111-4111-8111-111111111111',
+            timestamp: defaultTimestamp,
             context: { userId: 'u-42', sessionId: 's-7' },
             enabled: true,
             featureName: 'demo.flag',
@@ -98,6 +101,7 @@ describe('FlightRecorder', () => {
         const event: ImpressionEvent = {
             eventType: 'isEnabled',
             eventId: '11111111-1111-4111-8111-111111111111',
+            timestamp: '2026-05-14 10:00:00.000',
             context: {},
             enabled: true,
             featureName: 'demo.flag',
@@ -116,6 +120,31 @@ describe('FlightRecorder', () => {
                 body: `${JSON.stringify(event)}\n`,
             },
         ]);
+    });
+
+    it('preserves the timestamp from a recorded impression on the wire', async () => {
+        const snapshots: Array<Promise<RequestSnapshot>> = [];
+        const fakeFetch: typeof fetch = async (input) => {
+            snapshots.push(snapshotRequest(input as Request));
+            return new Response();
+        };
+
+        const recorder = createRecorder({ fetch: fakeFetch });
+        const event: ImpressionEvent = {
+            eventType: 'isEnabled',
+            eventId: '11111111-1111-4111-8111-111111111111',
+            timestamp: '2026-05-14 12:00:00.000',
+            context: {},
+            enabled: true,
+            featureName: 'demo.flag',
+        };
+        recorder.record(event);
+        await recorder.flush();
+
+        const [request] = await Promise.all(snapshots);
+        expect(JSON.parse(request!.body.trim())).toMatchObject({
+            timestamp: '2026-05-14 12:00:00.000',
+        });
     });
 
     it('an event recorded mid-flush is sent on the next flush', async () => {

@@ -51,15 +51,15 @@ describe('FlightRecorder', () => {
   });
 
   it('ships recorded events to the configured url on flush', async () => {
-    type Call = {
+    type CapturedRequest = {
       url: string;
       method: string;
       headers: Record<string, string>;
       body: string;
     };
-    const calls: Call[] = [];
+    const requests: CapturedRequest[] = [];
     const fakeFetch: typeof fetch = async (input, init) => {
-      calls.push({
+      requests.push({
         url: String(input),
         method: init?.method ?? 'GET',
         headers: (init?.headers as Record<string, string>) ?? {},
@@ -83,7 +83,7 @@ describe('FlightRecorder', () => {
     recorder.record(event);
     await recorder.flush();
 
-    expect(calls).toEqual([
+    expect(requests).toEqual([
       {
         url: 'https://example/events',
         method: 'POST',

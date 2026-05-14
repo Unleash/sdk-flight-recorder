@@ -47,11 +47,18 @@ describe('FlightRecorder', () => {
   });
 
   it('ships recorded events to the configured url on flush', async () => {
-    const calls: Array<{ url: string; method: string; body: string }> = [];
+    type Call = {
+      url: string;
+      method: string;
+      headers: Record<string, string>;
+      body: string;
+    };
+    const calls: Call[] = [];
     const fakeFetch: typeof fetch = async (input, init) => {
       calls.push({
         url: String(input),
         method: init?.method ?? 'GET',
+        headers: (init?.headers as Record<string, string>) ?? {},
         body: String(init?.body ?? ''),
       });
       return new Response();
@@ -75,6 +82,7 @@ describe('FlightRecorder', () => {
       {
         url: 'https://example/events',
         method: 'POST',
+        headers: { 'Content-Type': 'application/ndjson' },
         body: JSON.stringify(event) + '\n',
       },
     ]);

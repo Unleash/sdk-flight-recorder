@@ -41,6 +41,10 @@ export class FlightRecorder {
     if (this.buffer.length === 0) return;
     const toSend = this.buffer.splice(0);
     const body = toNdjson(toSend);
-    await this.fetch(this.url, { method: 'POST', body });
+    await this.fetch(this.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/ndjson' },
+      body,
+    });
   }
 }

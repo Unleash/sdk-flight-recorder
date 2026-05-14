@@ -1,0 +1,77 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.4.13/schema.json",
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "correctness": {
+        "noUnsafeOptionalChaining": "off",
+        "useExhaustiveDependencies": "off",
+        "noUnusedVariables": {
+          "level": "error",
+          "options": {
+            "ignoreRestSiblings": true
+          }
+        }
+      },
+      "complexity": {
+        "noBannedTypes": "off",
+        "noUselessConstructor": "off",
+        "useOptionalChain": "warn",
+        "noStaticOnlyClass": "off",
+        "noForEach": "off"
+      },
+      "style": {
+        "noNonNullAssertion": "off",
+        "noInferrableTypes": "off",
+        "noUnusedTemplateLiteral": "off",
+        "useSingleVarDeclarator": "off",
+        "noUselessElse": "off",
+        "useNodejsImportProtocol": "off"
+      },
+      "suspicious": {
+        "noExplicitAny": "off",
+        "noExtraNonNullAssertion": "off",
+        "noRedeclare": "off",
+        "noPrototypeBuiltins": "off",
+        "noConfusingVoidType": "off",
+        "noNonNullAssertedOptionalChain": "off"
+      },
+      "performance": {
+        "noAccumulatingSpread": "off",
+        "noDelete": "off"
+      }
+    }
+  },
+  "assist": { "actions": { "source": { "organizeImports": "off" } } },
+  "formatter": {
+    "indentStyle": "space",
+    "indentWidth": 4
+  },
+  "javascript": {
+    "formatter": {
+      "semicolons": "always",
+      "quoteStyle": "single",
+      "jsxQuoteStyle": "single",
+      "indentWidth": 4
+    }
+  },
+  "json": {
+    "formatter": {
+      "indentWidth": 2
+    }
+  },
+  "files": {
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/docker",
+      "!**/bundle.js",
+      "!**/dist",
+      "!**/build",
+      "!**/example",
+      "!**/CHANGELOG.md",
+      "!**/package.json"
+    ]
+  }
+}

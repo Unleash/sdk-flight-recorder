@@ -22,22 +22,30 @@ export type FlightRecorderOptions = {
     url: string;
     clientKey: string;
     fetch: typeof fetch;
+    batch?: {
+        flushAt?: number;
+    };
 };
 
 export class FlightRecorder {
     private readonly url: string;
     private readonly clientKey: string;
     private readonly fetch: typeof fetch;
+    private readonly flushAt: number | undefined;
     private readonly buffer: Array<ImpressionEvent | CustomEvent> = [];
 
     constructor(options: FlightRecorderOptions) {
         this.url = options.url;
         this.clientKey = options.clientKey;
         this.fetch = options.fetch;
+        this.flushAt = options.batch?.flushAt;
     }
 
     record(event: ImpressionEvent | CustomEvent): void {
         this.buffer.push(event);
+        if (this.flushAt !== undefined && this.buffer.length >= this.flushAt) {
+            void this.flush();
+        }
     }
 
     async flush(): Promise<void> {

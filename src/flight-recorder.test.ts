@@ -139,4 +139,40 @@ describe('FlightRecorder', () => {
             `${JSON.stringify(during)}\n`,
         ]);
     });
+
+    it('flushes automatically when the buffer reaches the configured size', async () => {
+        let fetchCalls = 0;
+        const fakeFetch: typeof fetch = async () => {
+            fetchCalls++;
+            return new Response();
+        };
+        const recorder = createRecorder({
+            fetch: fakeFetch,
+            batch: { flushAt: 2 },
+        });
+
+        recorder.record({
+            eventType: 'isEnabled',
+            eventId: '11111111-1111-4111-8111-111111111111',
+            context: {},
+            enabled: true,
+            featureName: 'demo.flag1',
+        });
+        await Promise.resolve(
+            'Force async tick to allow flush to run if it was triggered',
+        );
+        expect(fetchCalls).toBe(0);
+
+        recorder.record({
+            eventType: 'isEnabled',
+            eventId: '11111111-1111-4111-8111-111111111111',
+            context: {},
+            enabled: true,
+            featureName: 'demo.flag2',
+        });
+        await Promise.resolve(
+            'Force async tick to allow flush to run if it was triggered',
+        );
+        expect(fetchCalls).toBe(1);
+    });
 });

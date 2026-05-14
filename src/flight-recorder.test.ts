@@ -1,20 +1,26 @@
 import { describe, it, expect } from 'vitest';
 import {
   FlightRecorder,
+  type FlightRecorderOptions,
   type ImpressionEvent,
   type CustomEvent,
 } from './flight-recorder.js';
 
-const unusedFetch: typeof fetch = async () => new Response();
-const unusedClientKey = 'unused-client-key';
+const defaultUrl = 'https://example/events';
+const defaultFetch: typeof fetch = async () => new Response();
+const defaultClientKey = 'default-client-key';
+
+const createRecorder = (overrides: Partial<FlightRecorderOptions> = {}) =>
+  new FlightRecorder({
+    url: defaultUrl,
+    fetch: defaultFetch,
+    clientKey: defaultClientKey,
+    ...overrides,
+  });
 
 describe('FlightRecorder', () => {
   it('records an impression', () => {
-    const recorder = new FlightRecorder({
-      url: 'https://example/events',
-      fetch: unusedFetch,
-      clientKey: unusedClientKey,
-    });
+    const recorder = createRecorder();
     const event: ImpressionEvent = {
       eventType: 'isEnabled',
       eventId: '11111111-1111-4111-8111-111111111111',
@@ -26,11 +32,7 @@ describe('FlightRecorder', () => {
   });
 
   it('records a custom event', () => {
-    const recorder = new FlightRecorder({
-      url: 'https://example/events',
-      fetch: unusedFetch,
-      clientKey: unusedClientKey,
-    });
+    const recorder = createRecorder();
     const event: CustomEvent = {
       eventType: 'custom',
       eventId: '22222222-2222-4222-8222-222222222222',
@@ -42,11 +44,7 @@ describe('FlightRecorder', () => {
   });
 
   it('can flush with no events', async () => {
-    const recorder = new FlightRecorder({
-      url: 'https://example/events',
-      fetch: unusedFetch,
-      clientKey: unusedClientKey,
-    });
+    const recorder = createRecorder();
     await recorder.flush();
   });
 
@@ -68,10 +66,10 @@ describe('FlightRecorder', () => {
       return new Response();
     };
 
-    const recorder = new FlightRecorder({
-      url: 'https://example/events',
-      fetch: fakeFetch,
+    const recorder = createRecorder({
+      url: 'https://configured.example/events',
       clientKey: 'default:development.real-key-shape',
+      fetch: fakeFetch,
     });
     const event: ImpressionEvent = {
       eventType: 'isEnabled',
@@ -85,7 +83,7 @@ describe('FlightRecorder', () => {
 
     expect(requests).toEqual([
       {
-        url: 'https://example/events',
+        url: 'https://configured.example/events',
         method: 'POST',
         headers: {
           'Content-Type': 'application/ndjson',
@@ -112,11 +110,7 @@ describe('FlightRecorder', () => {
       return new Response();
     };
 
-    const recorder = new FlightRecorder({
-      url: 'https://example/events',
-      fetch: fakeFetch,
-      clientKey: unusedClientKey,
-    });
+    const recorder = createRecorder({ fetch: fakeFetch });
     const before: ImpressionEvent = {
       eventType: 'isEnabled',
       eventId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',

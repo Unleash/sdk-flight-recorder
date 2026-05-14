@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import type { Scheduler } from './scheduler.js';
+import { FakeScheduler } from './fake-scheduler.js';
 import {
     FlightRecorder,
     type FlightRecorderOptions,
@@ -9,12 +11,16 @@ import {
 const defaultUrl = 'https://example/events';
 const defaultFetch: typeof fetch = async () => new Response();
 const defaultClientKey = 'default-client-key';
+const defaultScheduler: Scheduler = {
+    runEvery: () => {},
+};
 
 const createRecorder = (overrides: Partial<FlightRecorderOptions> = {}) =>
     new FlightRecorder({
         url: defaultUrl,
         fetch: defaultFetch,
         clientKey: defaultClientKey,
+        scheduler: defaultScheduler,
         ...overrides,
     });
 
@@ -173,6 +179,36 @@ describe('FlightRecorder', () => {
         await Promise.resolve(
             'Force async tick to allow flush to run if it was triggered',
         );
+        expect(fetchCalls).toBe(1);
+    });
+
+    it('flushes automatically after the configured time elapses', async () => {
+        let fetchCalls = 0;
+        const fakeFetch: typeof fetch = async () => {
+            fetchCalls++;
+            return new Response();
+        };
+        const scheduler = new FakeScheduler();
+        const recorder = createRecorder({
+            fetch: fakeFetch,
+            scheduler,
+            batch: { flushAfterMs: 2000, flushAt: 2 },
+        });
+
+        recorder.record({
+            eventType: 'isEnabled',
+            eventId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+            context: {},
+            enabled: true,
+            featureName: 'flag-time',
+        });
+        expect(fetchCalls).toBe(0);
+
+        scheduler.advance(2000);
+        await Promise.resolve(
+            'let the fire-and-forget flush run after the interval fires',
+        );
+
         expect(fetchCalls).toBe(1);
     });
 });

@@ -3,6 +3,7 @@ import type { Scheduler } from './scheduler.js';
 import { FakeScheduler } from './fake-scheduler.js';
 import {
     FlightRecorder,
+    type ErrorInfo,
     type FlightRecorderOptions,
     type ImpressionEvent,
     type CustomEvent,
@@ -210,5 +211,64 @@ describe('FlightRecorder', () => {
         );
 
         expect(fetchCalls).toBe(1);
+    });
+
+    it('retries the failed fetch after one attempt and then succeeds', async () => {
+        let attemptCount = 0;
+        const fakeFetch: typeof fetch = async () => {
+            attemptCount++;
+            if (attemptCount === 1) throw new Error('boom');
+            return new Response();
+        };
+        const errors: ErrorInfo[] = [];
+
+        const recorder = createRecorder({
+            fetch: fakeFetch,
+            retry: { attempts: 2 },
+            onError: (info) => errors.push(info),
+        });
+        recorder.record({
+            eventType: 'isEnabled',
+            eventId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+            context: {},
+            enabled: true,
+            featureName: 'retry-test',
+        });
+        await recorder.flush();
+
+        expect(attemptCount).toBe(2);
+        expect(errors).toEqual([]);
+    });
+
+    it('invokes onError when all retry attempts fail', async () => {
+        const networkError = new Error('network down');
+        const fakeFetch: typeof fetch = async () => {
+            throw networkError;
+        };
+        const errors: ErrorInfo[] = [];
+
+        const recorder = createRecorder({
+            fetch: fakeFetch,
+            retry: { attempts: 2 },
+            onError: (info) => errors.push(info),
+        });
+        const event: ImpressionEvent = {
+            eventType: 'isEnabled',
+            eventId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+            context: {},
+            enabled: true,
+            featureName: 'failing-flag',
+        };
+        recorder.record(event);
+        await recorder.flush();
+
+        expect(errors).toEqual([
+            {
+                reason: 'persistentFailure',
+                droppedEventCount: 1,
+                attempts: 2,
+                error: networkError,
+            },
+        ]);
     });
 });

@@ -19,6 +19,13 @@ export type CustomEvent = {
     payload?: unknown;
 };
 
+export type ErrorInfo = {
+    reason: 'persistentFailure';
+    droppedEventCount: number;
+    attempts: number;
+    error: unknown;
+};
+
 export type FlightRecorderOptions = {
     url: string;
     clientKey: string;
@@ -28,6 +35,10 @@ export type FlightRecorderOptions = {
         flushAt?: number;
         flushAfterMs?: number;
     };
+    retry?: {
+        attempts: number;
+    };
+    onError?: (info: ErrorInfo) => void;
 };
 
 export class FlightRecorder {
@@ -37,6 +48,8 @@ export class FlightRecorder {
     private readonly scheduler: Scheduler;
     private readonly flushAt: number | undefined;
     private readonly flushAfterMs: number | undefined;
+    private readonly attempts: number;
+    private readonly onError: ((info: ErrorInfo) => void) | undefined;
     private readonly buffer: Array<ImpressionEvent | CustomEvent> = [];
 
     constructor(options: FlightRecorderOptions) {
@@ -46,6 +59,8 @@ export class FlightRecorder {
         this.scheduler = options.scheduler;
         this.flushAt = options.batch?.flushAt;
         this.flushAfterMs = options.batch?.flushAfterMs;
+        this.attempts = options.retry?.attempts ?? 1;
+        this.onError = options.onError;
         if (this.flushAfterMs !== undefined) {
             this.scheduler.runEvery(this.flushAfterMs, () => {
                 void this.flush();
@@ -64,13 +79,29 @@ export class FlightRecorder {
         if (this.buffer.length === 0) return;
         const toSend = this.buffer.splice(0);
         const body = toNdjson(toSend);
-        await this.fetch(this.url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/ndjson',
-                Authorization: this.clientKey,
-            },
-            body,
-        });
+
+        for (let attempt = 1; attempt <= this.attempts; attempt++) {
+            try {
+                await this.fetch(this.url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/ndjson',
+                        Authorization: this.clientKey,
+                    },
+                    body,
+                });
+                return;
+            } catch (err) {
+                if (attempt === this.attempts) {
+                    this.onError?.({
+                        reason: 'persistentFailure',
+                        droppedEventCount: toSend.length,
+                        attempts: attempt,
+                        error: err,
+                    });
+                    return;
+                }
+            }
+        }
     }
 }

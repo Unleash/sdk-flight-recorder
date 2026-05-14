@@ -47,3 +47,15 @@ Opt-in via `batch.flushAt`; when set, `record()` triggers `void this.flush()` at
 ## `Scheduler` collaborator with `runEvery`, not `Clock`
 
 Time-based auto-flush takes a required `Scheduler = { runEvery(ms, handler): void }`. The constructor schedules a single periodic flush via `scheduler.runEvery(batch.flushAfterMs, ...)` when `flushAfterMs` is set. *Why:* the abstraction's job is "schedule recurring work," not "expose time" — `Clock` (with `now()`/`setTimeout`) was both wider than needed and misnamed. One periodic loop (vs. the reference's one-shot timer per batch) keeps the API and the test fake small; idle ticks short-circuit cheaply on the empty-buffer guard in `flush()`.
+
+## Retry on fetch failure via `retry.attempts`
+
+Opt-in via `retry: { attempts: number }`; `attempts` is total attempts (1 initial + N−1 retries), matching `ky.retry.limit`. `flush()` loops up to `attempts` times on fetch rejection. Default (no `retry`) = 1 attempt = no-retry behavior. *Why:* opt-in keeps callers who want no retry from paying for it implicitly, and reusing the reference's `attempts`-as-total convention avoids an off-by-one trap when readers move between the two codebases.
+
+## Losses surface via `onError`, not thrown from `flush()`
+
+`flush()` never rejects; exhausted retries fire an injected `onError(info)` callback with a discriminated reason union (initially `{ reason: 'persistentFailure', droppedEventCount, attempts, error }`; `queueFull`, `malformed`, etc. will join later). *Why:* auto-flush is fire-and-forget (`void this.flush()`), so a thrown error becomes an unhandled rejection with no info on which events were lost. A callback unifies all loss reasons through one observability hook the integrator wires once. If `onError` is unset, the error is silently swallowed — explicit opt-in to observability matches our DI discipline.
+
+## `onError` carries `droppedEventCount`, not the events themselves
+
+The `persistentFailure` payload exposes `droppedEventCount: number`, not the full `events: Event[]` array (which the reference design includes). *Why:* the buffer can hold thousands of events; passing them to a user-supplied callback retains the whole batch in memory until the callback returns and risks long-lived references in observability code. A count is enough for the dominant use case (metrics, alerting). Callers who need event-level forensics can capture the events themselves via a custom `fetch` wrapper that logs request bodies — that's the right seam.

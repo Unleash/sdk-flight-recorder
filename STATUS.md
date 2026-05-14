@@ -22,7 +22,7 @@ Last updated: 2026-05-14
 `src/ndjson.ts`
 - `toNdjson(items: ReadonlyArray<unknown>): string` — generic NDJSON serializer. One JSON object per line, trailing `\n`. Returns `''` for empty input (the recorder's `flush` already guards against calling it that way, but the function handles it safely).
 
-## Tests (8 passing)
+## Tests (10 passing)
 
 `src/flight-recorder.test.ts`
 1. `'records an impression'` — `record()` accepts an `ImpressionEvent`
@@ -31,10 +31,12 @@ Last updated: 2026-05-14
 4. `'ships recorded events to the configured url on flush'` — happy path: asserts URL, method, headers (`Content-Type`, `Authorization`), and body in a single `expect`
 5. `'an event recorded mid-flush is sent on the next flush'` — atomicity: events recorded during an in-flight `fetch` are preserved for the next flush
 6. `'flushes automatically when the buffer reaches the configured size'` — size-based auto-flush via `batch.flushAt`. Counts `fetch` calls before/after threshold
-7. `'flushes automatically after the configured time elapses'` — time-based auto-flush via periodic `scheduler.every(flushAfterMs, ...)`. Counts `fetch` calls before/after `scheduler.advance(flushAfterMs)`
+7. `'flushes automatically after the configured time elapses'` — time-based auto-flush via periodic `scheduler.runEvery(flushAfterMs, ...)`. Counts `fetch` calls before/after `scheduler.advance(flushAfterMs)`
+8. `'retries the failed fetch after one attempt and then succeeds'` — retry loop in `flush()` bounded by `retry.attempts`. Asserts both attempt count (2) and that `onError` was not called (recovery succeeded)
+9. `'invokes onError when all retry attempts fail'` — exhausted retries fire `onError({ reason: 'persistentFailure', droppedEventCount, attempts, error })`. `flush()` itself does not reject
 
 `src/ndjson.test.ts`
-8. `'emits one JSON object per line with a trailing newline'`
+10. `'emits one JSON object per line with a trailing newline'`
 
 Test conveniences in `flight-recorder.test.ts`:
 - Module-level `defaultUrl`, `defaultFetch`, `defaultClientKey`, and a `createRecorder(overrides?)` factory. Tests that don't exercise a particular constructor input rely on the factory; tests that do override (with values different from defaults) to make the data flow visible.

@@ -48,9 +48,13 @@ Opt-in via `batch.flushAt`; when set, `record()` triggers `void this.flush()` at
 
 Time-based auto-flush takes a required `Scheduler = { runEvery(ms, handler): void }`. The constructor schedules a single periodic flush via `scheduler.runEvery(batch.flushAfterMs, ...)` when `flushAfterMs` is set. *Why:* the abstraction's job is "schedule recurring work," not "expose time" — `Clock` (with `now()`/`setTimeout`) was both wider than needed and misnamed. One periodic loop (vs. the reference's one-shot timer per batch) keeps the API and the test fake small; idle ticks short-circuit cheaply on the empty-buffer guard in `flush()`.
 
-## Retry on fetch failure via `retry.attempts`
+## Transport via `ky`, fetch still injected
 
-Opt-in via `retry: { attempts: number }`; `attempts` is total attempts (1 initial + N−1 retries), matching `ky.retry.limit`. `flush()` loops up to `attempts` times on fetch rejection. Default (no `retry`) = 1 attempt = no-retry behavior. *Why:* opt-in keeps callers who want no retry from paying for it implicitly, and reusing the reference's `attempts`-as-total convention avoids an off-by-one trap when readers move between the two codebases.
+The transport is `ky` (v2.x) underneath; production callers still inject `fetch` via `FlightRecorderOptions.fetch`, which we pass through to `ky.create({ fetch })`. *Why:* implementing retries, exponential backoff, status-code filtering, and per-request timeout correctly is a known-hard problem with edge cases (Retry-After parsing, jitter, network-error detection); ky has solved this well. Keeping `fetch` injected preserves the existing DI seam — production passes `globalThis.fetch`, tests pass fakes that receive ky's `Request` objects.
+
+## Retry config: only `retry.retries`; everything else uses ky defaults
+
+The only retry knob is `retry: { retries: number }` (opt-in; default 0 = no retry). Backoff curve, max delay cap, retriable status codes, jitter — all left to ky's built-ins. POST is force-enabled via `methods: ['post']` since ky's default excludes it. *Why:* hand-rolling delay-clamp / status-code list duplicates work ky already does well; surfacing them as options pre-emptively was scope creep with no test to justify it. If a real integration ever needs a different curve or a tighter cap, add the option then with the test that demands it.
 
 ## Losses surface via `onError`, not thrown from `flush()`
 

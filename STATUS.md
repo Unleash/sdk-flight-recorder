@@ -7,11 +7,11 @@ Last updated: 2026-05-14
 ## What's built
 
 `src/flight-recorder.ts`
-- `FlightRecorder` with explicit DI: `{ url, clientKey, fetch, scheduler, batch? }`. Collaborators required (no defaults); `batch.flushAt` and `batch.flushAfterMs` opt-in.
+- `FlightRecorder` with explicit DI: `{ url, clientKey, fetch, scheduler, batch?, retry?, onError? }`. Collaborators required (no defaults); `batch`, `retry?: { retries }`, `onError` opt-in. Only retry knob is `retries` — backoff/cap/status-codes/timeout all use ky's defaults.
 - Constructor schedules a periodic flush via `scheduler.runEvery(flushAfterMs, flushCb)` when `flushAfterMs` is set. Single loop, not per-batch timer (diverges from reference design — see memory).
 - `record(event: ImpressionEvent | CustomEvent)` — pushes to internal buffer; fires `void this.flush()` when `buffer.length >= batch.flushAt` (if configured).
-- `async flush()` — early-return on empty buffer; atomic snapshot via `buffer.splice(0)`; serializes via `toNdjson`; `POST` to `url` with `Content-Type: application/ndjson` and `Authorization: <clientKey>`.
-- Types: `ImpressionEvent` (discriminated by `eventType: 'isEnabled' | 'getVariant'`), `CustomEvent` (`eventType: 'custom'`), `FlightRecorderOptions` (nested `batch?: { flushAt?, flushAfterMs? }`).
+- `async flush()` — early-return on empty buffer; atomic snapshot via `buffer.splice(0)`; serializes via `toNdjson`; POSTs via `ky` configured with `retry`/`timeout`/exponential backoff and our injected `fetch`. Exhausted retries fire `onError({ reason: 'persistentFailure', droppedEventCount, error: NetworkError | HTTPError })`; `flush()` never rejects.
+- Types: `ImpressionEvent` (discriminated by `eventType: 'isEnabled' | 'getVariant'`), `CustomEvent` (`eventType: 'custom'`), `ErrorInfo` (currently single variant), `FlightRecorderOptions` (nested `batch?: { flushAt?, flushAfterMs? }`, `retry?: { retries }`).
 
 `src/scheduler.ts`
 - `Scheduler = { runEvery(ms, handler): void }`. Single periodic-tick abstraction; no `now`/`setTimeout`/`clearTimeout`. No production impl yet — production callers must provide one.
@@ -28,12 +28,12 @@ Last updated: 2026-05-14
 1. `'records an impression'` — `record()` accepts an `ImpressionEvent`
 2. `'records a custom event'` — `record()` accepts a `CustomEvent`
 3. `'can flush with no events'` — empty-buffer guard
-4. `'ships recorded events to the configured url on flush'` — happy path: asserts URL, method, headers (`Content-Type`, `Authorization`), and body in a single `expect`
+4. `'ships recorded events to the configured url on flush'` — happy path: captures the outgoing `Request`'s url/method/content-type/authorization/body inside the fake and asserts the whole shape via one `toMatchObject`
 5. `'an event recorded mid-flush is sent on the next flush'` — atomicity: events recorded during an in-flight `fetch` are preserved for the next flush
 6. `'flushes automatically when the buffer reaches the configured size'` — size-based auto-flush via `batch.flushAt`. Counts `fetch` calls before/after threshold
 7. `'flushes automatically after the configured time elapses'` — time-based auto-flush via periodic `scheduler.runEvery(flushAfterMs, ...)`. Counts `fetch` calls before/after `scheduler.advance(flushAfterMs)`
-8. `'retries the failed fetch after one attempt and then succeeds'` — retry loop in `flush()` bounded by `retry.attempts`. Asserts both attempt count (2) and that `onError` was not called (recovery succeeded)
-9. `'invokes onError when all retry attempts fail'` — exhausted retries fire `onError({ reason: 'persistentFailure', droppedEventCount, attempts, error })`. `flush()` itself does not reject
+8. `'retries the failed fetch after one attempt and then succeeds'` — ky retries on `TypeError('Failed to fetch')` (ky's network-error detection). Asserts fetch was called twice and that `onError` was not called
+9. `'invokes onError when all retry attempts fail'` — exhausted retries fire `onError({ reason: 'persistentFailure', droppedEventCount, error: NetworkError })`. `flush()` itself does not reject
 
 `src/ndjson.test.ts`
 10. `'emits one JSON object per line with a trailing newline'`

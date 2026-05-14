@@ -1,3 +1,4 @@
+import ky from 'ky';
 import type { Scheduler } from './scheduler.js';
 import { toNdjson } from './ndjson.js';
 
@@ -22,7 +23,6 @@ export type CustomEvent = {
 export type ErrorInfo = {
     reason: 'persistentFailure';
     droppedEventCount: number;
-    attempts: number;
     error: unknown;
 };
 
@@ -36,7 +36,7 @@ export type FlightRecorderOptions = {
         flushAfterMs?: number;
     };
     retry?: {
-        attempts: number;
+        retries: number;
     };
     onError?: (info: ErrorInfo) => void;
 };
@@ -48,7 +48,7 @@ export class FlightRecorder {
     private readonly scheduler: Scheduler;
     private readonly flushAt: number | undefined;
     private readonly flushAfterMs: number | undefined;
-    private readonly attempts: number;
+    private readonly retries: number;
     private readonly onError: ((info: ErrorInfo) => void) | undefined;
     private readonly buffer: Array<ImpressionEvent | CustomEvent> = [];
 
@@ -59,7 +59,7 @@ export class FlightRecorder {
         this.scheduler = options.scheduler;
         this.flushAt = options.batch?.flushAt;
         this.flushAfterMs = options.batch?.flushAfterMs;
-        this.attempts = options.retry?.attempts ?? 1;
+        this.retries = options.retry?.retries ?? 0;
         this.onError = options.onError;
         if (this.flushAfterMs !== undefined) {
             this.scheduler.runEvery(this.flushAfterMs, () => {
@@ -80,28 +80,27 @@ export class FlightRecorder {
         const toSend = this.buffer.splice(0);
         const body = toNdjson(toSend);
 
-        for (let attempt = 1; attempt <= this.attempts; attempt++) {
-            try {
-                await this.fetch(this.url, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/ndjson',
-                        Authorization: this.clientKey,
-                    },
-                    body,
-                });
-                return;
-            } catch (err) {
-                if (attempt === this.attempts) {
-                    this.onError?.({
-                        reason: 'persistentFailure',
-                        droppedEventCount: toSend.length,
-                        attempts: attempt,
-                        error: err,
-                    });
-                    return;
-                }
-            }
+        const client = ky.create({
+            fetch: this.fetch,
+            retry: {
+                limit: this.retries,
+                methods: ['post'],
+            },
+            headers: {
+                'content-type': 'application/ndjson',
+                authorization: this.clientKey,
+            },
+            body,
+        });
+
+        try {
+            await client.post(this.url);
+        } catch (err) {
+            this.onError?.({
+                reason: 'persistentFailure',
+                droppedEventCount: toSend.length,
+                error: err,
+            });
         }
     }
 }

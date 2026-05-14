@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { NetworkError } from 'ky';
 import type { Scheduler } from './scheduler.js';
 import { FakeScheduler } from './fake-scheduler.js';
 import {
@@ -8,6 +9,23 @@ import {
     type ImpressionEvent,
     type CustomEvent,
 } from './flight-recorder.js';
+
+type RequestSnapshot = {
+    url: string;
+    method: string;
+    headers: Record<string, string>;
+    body: string;
+};
+
+const snapshotRequest = async (req: Request): Promise<RequestSnapshot> => {
+    const cloned = req.clone();
+    return {
+        url: cloned.url,
+        method: cloned.method,
+        headers: Object.fromEntries(cloned.headers),
+        body: await cloned.text(),
+    };
+};
 
 const defaultUrl = 'https://example/events';
 const defaultFetch: typeof fetch = async () => new Response();
@@ -56,20 +74,9 @@ describe('FlightRecorder', () => {
     });
 
     it('ships recorded events to the configured url on flush', async () => {
-        type CapturedRequest = {
-            url: string;
-            method: string;
-            headers: Record<string, string>;
-            body: string;
-        };
-        const requests: CapturedRequest[] = [];
-        const fakeFetch: typeof fetch = async (input, init) => {
-            requests.push({
-                url: String(input),
-                method: init?.method ?? 'GET',
-                headers: (init?.headers as Record<string, string>) ?? {},
-                body: String(init?.body ?? ''),
-            });
+        const snapshots: Array<Promise<RequestSnapshot>> = [];
+        const fakeFetch: typeof fetch = async (input) => {
+            snapshots.push(snapshotRequest(input as Request));
             return new Response();
         };
 
@@ -88,13 +95,13 @@ describe('FlightRecorder', () => {
         recorder.record(event);
         await recorder.flush();
 
-        expect(requests).toEqual([
+        expect(await Promise.all(snapshots)).toMatchObject([
             {
                 url: 'https://configured.example/events',
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/ndjson',
-                    Authorization: 'default:development.real-key-shape',
+                    'content-type': 'application/ndjson',
+                    authorization: 'default:development.real-key-shape',
                 },
                 body: `${JSON.stringify(event)}\n`,
             },
@@ -102,14 +109,14 @@ describe('FlightRecorder', () => {
     });
 
     it('an event recorded mid-flush is sent on the next flush', async () => {
-        const sentBodies: string[] = [];
+        const snapshots: Array<Promise<RequestSnapshot>> = [];
         let releaseFirstFetch!: () => void;
         const firstFetchInFlight = new Promise<void>((resolve) => {
             releaseFirstFetch = resolve;
         });
         let isFirstFetch = true;
-        const fakeFetch: typeof fetch = async (_input, init) => {
-            sentBodies.push(String(init?.body ?? ''));
+        const fakeFetch: typeof fetch = async (input) => {
+            snapshots.push(snapshotRequest(input as Request));
             if (isFirstFetch) {
                 isFirstFetch = false;
                 await firstFetchInFlight;
@@ -141,9 +148,9 @@ describe('FlightRecorder', () => {
 
         await recorder.flush();
 
-        expect(sentBodies).toEqual([
-            `${JSON.stringify(before)}\n`,
-            `${JSON.stringify(during)}\n`,
+        expect(await Promise.all(snapshots)).toMatchObject([
+            { body: `${JSON.stringify(before)}\n` },
+            { body: `${JSON.stringify(during)}\n` },
         ]);
     });
 
@@ -165,9 +172,7 @@ describe('FlightRecorder', () => {
             enabled: true,
             featureName: 'demo.flag1',
         });
-        await Promise.resolve(
-            'Force async tick to allow flush to run if it was triggered',
-        );
+        await new Promise<void>((resolve) => setImmediate(resolve));
         expect(fetchCalls).toBe(0);
 
         recorder.record({
@@ -177,9 +182,7 @@ describe('FlightRecorder', () => {
             enabled: true,
             featureName: 'demo.flag2',
         });
-        await Promise.resolve(
-            'Force async tick to allow flush to run if it was triggered',
-        );
+        await new Promise<void>((resolve) => setImmediate(resolve));
         expect(fetchCalls).toBe(1);
     });
 
@@ -206,9 +209,7 @@ describe('FlightRecorder', () => {
         expect(fetchCalls).toBe(0);
 
         scheduler.advance(2000);
-        await Promise.resolve(
-            'let the fire-and-forget flush run after the interval fires',
-        );
+        await new Promise<void>((resolve) => setImmediate(resolve));
 
         expect(fetchCalls).toBe(1);
     });
@@ -217,14 +218,14 @@ describe('FlightRecorder', () => {
         let attemptCount = 0;
         const fakeFetch: typeof fetch = async () => {
             attemptCount++;
-            if (attemptCount === 1) throw new Error('boom');
+            if (attemptCount === 1) throw new TypeError('Failed to fetch');
             return new Response();
         };
         const errors: ErrorInfo[] = [];
 
         const recorder = createRecorder({
             fetch: fakeFetch,
-            retry: { attempts: 2 },
+            retry: { retries: 1 },
             onError: (info) => errors.push(info),
         });
         recorder.record({
@@ -241,15 +242,14 @@ describe('FlightRecorder', () => {
     });
 
     it('invokes onError when all retry attempts fail', async () => {
-        const networkError = new Error('network down');
         const fakeFetch: typeof fetch = async () => {
-            throw networkError;
+            throw new TypeError('Failed to fetch');
         };
         const errors: ErrorInfo[] = [];
 
         const recorder = createRecorder({
             fetch: fakeFetch,
-            retry: { attempts: 2 },
+            retry: { retries: 1 },
             onError: (info) => errors.push(info),
         });
         const event: ImpressionEvent = {
@@ -262,12 +262,11 @@ describe('FlightRecorder', () => {
         recorder.record(event);
         await recorder.flush();
 
-        expect(errors).toEqual([
+        expect(errors).toMatchObject([
             {
                 reason: 'persistentFailure',
                 droppedEventCount: 1,
-                attempts: 2,
-                error: networkError,
+                error: expect.any(NetworkError),
             },
         ]);
     });

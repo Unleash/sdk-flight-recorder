@@ -72,6 +72,23 @@ The `persistentFailure` payload exposes `droppedEventCount: number`, not the ful
 
 Retry / backoff / ky-specific behavior is tested in `src/http-client.test.ts`. `src/flight-recorder.test.ts` only tests recorder-level behavior (buffering, auto-flush, mid-flush atomicity, `onError` firing on transport failure) using a `fakeFetch` that does whatever the test needs in a single call. *Why:* before this split, `flight-recorder.test.ts` ran in ~614ms because two retry tests paid ky's ~300ms backoff each. After moving the retry test to `http-client.test.ts` and rewriting the `onError` test to use `retries: 0` (one throw, no backoff), the recorder suite runs in ~14ms. The slow test still exists — but it lives at the level where retry *is* the contract being tested, not where it's an implementation detail leaking through a stacked integration.
 
+## `Scheduler.stop()` + `getStatus()`; `close()` stops + final-flushes
+
+```ts
+type SchedulerStatus = 'active' | 'stopped';
+type Scheduler = {
+  runEvery(ms: number, handler: () => void): void;
+  stop(): void;
+  getStatus(): SchedulerStatus;
+};
+```
+
+`FlightRecorder.close()` calls `this.scheduler.stop()` to stop the periodic loop, then `await this.flush()` for the final drain. *Why:* graceful shutdown is the production-driving use case (SIGTERM in BE, page unload in FE). Putting `stop` and `getStatus` directly on the scheduler keeps the seam small (one collaborator) and avoids per-call-site bookkeeping a returned-handle approach would force the recorder to do.
+
+`getStatus()` returns the explicit `'active' | 'stopped'` union rather than a boolean (`isActive`/`isStopped`) because a named status reads more clearly in assertions (`expect(scheduler.getStatus()).toBe('stopped')`) and leaves room to add more states (`'idle'`?) without flipping boolean semantics. It's now on the public `Scheduler` interface — production implementations must surface their state the same way.
+
+The scheduler is one-interval-only by contract: `runEvery` throws if called a second time. *Why:* `FlightRecorder` registers at most one periodic flush per instance, so the "list of intervals" was defensive flexibility nothing exercised. Throwing on a second call catches misuse instead of silently replacing or accumulating.
+
 ## `retryDelay` option on `HttpClient` — test escape hatch, ky default in production
 
 `HttpClientOptions.retryDelay?: (attemptCount: number) => number` is an optional pass-through to ky's `retry.delay`. When unset (production default), ky's exponential backoff applies. Tests pass `retryDelay: () => 0` so the retry-coverage test runs in ~10ms instead of ~310ms. *Why:* the HttpClient retry test covers a real choice we make (opting POST into ky's retry list via `methods: ['post']`), and renaming it from `'retries the failed fetch after one attempt and then succeeds'` to `'retries POST requests when retries is configured'` makes that value visible. But paying ~300ms per CI run for that single assertion is wasteful — the delay is incidental to what the test asserts. Exposing `retryDelay` lets the test override it without changing production behavior. The option is not surfaced on `FlightRecorderOptions` yet; if a production caller ever needs a custom curve, add it then with the test that demands it (per [[feedback-design-taste]]).

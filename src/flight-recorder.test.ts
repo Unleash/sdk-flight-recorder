@@ -32,6 +32,8 @@ const defaultFetch: typeof fetch = async () => new Response();
 const defaultClientKey = 'default-client-key';
 const defaultScheduler: Scheduler = {
     runEvery: () => {},
+    stop: () => {},
+    getStatus: () => 'stopped',
 };
 
 const createRecorder = (overrides: Partial<FlightRecorderOptions> = {}) =>
@@ -243,13 +245,18 @@ describe('FlightRecorder', () => {
         ]);
     });
 
-    it('flushes pending events on close', async () => {
+    it('flushes pending events and stops the periodic flush on close', async () => {
         let fetchCalls = 0;
         const fakeFetch: typeof fetch = async () => {
             fetchCalls++;
             return new Response();
         };
-        const recorder = createRecorder({ fetch: fakeFetch });
+        const scheduler = new FakeScheduler();
+        const recorder = createRecorder({
+            fetch: fakeFetch,
+            scheduler,
+            batch: { flushAfterMs: 2000 },
+        });
 
         recorder.record({
             eventType: 'isEnabled',
@@ -261,5 +268,6 @@ describe('FlightRecorder', () => {
         await recorder.close();
 
         expect(fetchCalls).toBe(1);
+        expect(scheduler.getStatus()).toBe('stopped');
     });
 });

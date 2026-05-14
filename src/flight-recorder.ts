@@ -93,6 +93,7 @@ export class FlightRecorder {
     }
 
     async close(): Promise<void> {
+        this.scheduler.stop();
         await this.flush();
     }
 }

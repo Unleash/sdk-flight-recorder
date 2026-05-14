@@ -47,7 +47,6 @@ export class FlightRecorder {
     private readonly httpClient: HttpClient;
     private readonly scheduler: Scheduler;
     private readonly flushAt: number | undefined;
-    private readonly flushAfterMs: number | undefined;
     private readonly onError: ((info: ErrorInfo) => void) | undefined;
     private readonly buffer: Array<ImpressionEvent | CustomEvent> = [];
     private status: RecorderStatus = 'open';
@@ -64,12 +63,10 @@ export class FlightRecorder {
         });
         this.scheduler = options.scheduler;
         this.flushAt = options.batch?.flushAt;
-        this.flushAfterMs = options.batch?.flushAfterMs;
         this.onError = options.onError;
-        if (this.flushAfterMs !== undefined) {
-            this.scheduler.runEvery(this.flushAfterMs, () => {
-                void this.flush();
-            });
+        const flushAfterMs = options.batch?.flushAfterMs;
+        if (flushAfterMs !== undefined) {
+            this.scheduler.runEvery(flushAfterMs, () => this.flush());
         }
     }
 

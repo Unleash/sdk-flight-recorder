@@ -1,11 +1,11 @@
 import type { Scheduler, SchedulerStatus } from './scheduler.js';
 
-type Interval = { ms: number; handler: () => void; status: SchedulerStatus };
+type Interval = { ms: number; handler: () => Promise<void>; status: SchedulerStatus };
 
 export class FakeScheduler implements Scheduler {
     private interval: Interval | undefined;
 
-    runEvery(ms: number, handler: () => void): void {
+    runEvery(ms: number, handler: () => Promise<void>): void {
         if (this.interval !== undefined) {
             throw new Error('FakeScheduler.runEvery called twice; only one interval is supported');
         }
@@ -22,9 +22,12 @@ export class FakeScheduler implements Scheduler {
         return this.interval?.status ?? 'stopped';
     }
 
-    advance(ms: number): void {
-        if (this.interval === undefined || this.interval.status === 'stopped') return;
+    async advance(ms: number): Promise<void> {
+        if (this.interval === undefined) return;
         const times = Math.floor(ms / this.interval.ms);
-        for (let i = 0; i < times; i++) this.interval.handler();
+        for (let i = 0; i < times; i++) {
+            if (this.interval.status === 'stopped') return;
+            await this.interval.handler();
+        }
     }
 }

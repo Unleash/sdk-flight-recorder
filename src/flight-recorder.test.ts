@@ -188,8 +188,7 @@ describe('FlightRecorder', () => {
         recorder.record(defaultImpressionEvent);
         expect(fetchCalls).toBe(0);
 
-        scheduler.advance(2000);
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await scheduler.advance(2000);
 
         expect(fetchCalls).toBe(1);
     });

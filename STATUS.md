@@ -8,26 +8,28 @@ Last updated: 2026-05-14
 
 `src/flight-recorder.ts`
 - `FlightRecorder` with explicit DI: `{ url, clientKey, fetch, scheduler, batch?, retry?, onError? }`. Collaborators required (no defaults); `batch`, `retry?: { retries }`, `onError` opt-in. Only retry knob is `retries` — backoff/cap/status-codes/timeout all use ky's defaults.
-- Constructor builds an `HttpClient` once (via `createHttpClient` from `http-client.ts`) and schedules a periodic flush via `scheduler.runEvery(flushAfterMs, flushCb)` when `flushAfterMs` is set.
-- `record(event: ImpressionEvent | CustomEvent)` — pushes to internal buffer; fires `void this.flush()` when `buffer.length >= batch.flushAt` (if configured).
-- `async flush()` — early-return on empty buffer; atomic snapshot via `buffer.splice(0)`; serializes via `toNdjson`; sends via `httpClient.post(body)`. Exhausted retries fire `onError({ reason: 'persistentFailure', droppedEventCount, error: NetworkError | HTTPError })`; `flush()` never rejects.
+- Constructor builds an `HttpClient` once and schedules `scheduler.runEvery(flushAfterMs, () => this.flush())` when `flushAfterMs` is set. The scheduler is contractually required to await the handler before the next tick — so periodic flushes naturally serialize.
+- `record(event)` — pushes to buffer (no-op if closed); fires `void this.flush()` when `buffer.length >= batch.flushAt`.
+- `flush()` — no-op if closed or empty; otherwise splices the buffer, posts via `httpClient`, calls `onError` on persistent failure.
+- `close()` — stops the scheduler, runs a final `flush()`, then marks status closed (status flip after the flush so its own guard doesn't skip the drain).
+- **No in-flight tracking.** Concurrent flushes can race; `close()` does not await earlier in-flight HTTPs. Acceptable for dogfooding scope; revisit if a real test demands it.
 - Types: `ImpressionEvent` (discriminated by `eventType: 'isEnabled' | 'getVariant'`), `CustomEvent` (`eventType: 'custom'`), `ErrorInfo` (currently single variant), `FlightRecorderOptions` (nested `batch?: { flushAt?, flushAfterMs? }`, `retry?: { retries }`).
 
 `src/http-client.ts`
 - `createHttpClient({ url, headers, fetch, retries }): HttpClient`. Single method: `post(body: string): Promise<void>`. Wraps ky (retry/methods/headers/fetch). The only module that imports `ky`.
 
 `src/scheduler.ts`
-- `Scheduler = { runEvery(ms, handler): void; stop(): void; getStatus(): SchedulerStatus }` where `SchedulerStatus = 'active' | 'stopped'`. Single periodic-tick abstraction; no `now`/`setTimeout`/`clearTimeout`. No production impl yet — production callers must provide one.
+- `Scheduler = { runEvery(ms, handler: () => Promise<void>): void; stop(): void; getStatus(): SchedulerStatus }` where `SchedulerStatus = 'active' | 'stopped'`. The handler is async; the scheduler must await it before scheduling the next tick (self-chained-setTimeout pattern, matching `unleash-client-node`). No production impl yet.
 
 `src/fake-scheduler.ts`
-- `FakeScheduler implements Scheduler` for tests. One-interval-only: a second call to `runEvery` throws. `advance(ms)` fires the registered handler `Math.floor(ms / interval.ms)` times (skips if stopped). Reports `'active'`/`'stopped'` via `getStatus()`. Non-cumulative across `advance` calls.
+- `FakeScheduler implements Scheduler` for tests. One-interval-only: a second call to `runEvery` throws. `advance(ms): Promise<void>` is async — awaits the handler between iterations. Tests use `await scheduler.advance(...)`. Reports `'active'`/`'stopped'` via `getStatus()`. Non-cumulative across `advance` calls.
 
 `src/ndjson.ts`
 - `toNdjson(items: ReadonlyArray<unknown>): string` — generic NDJSON serializer. One JSON object per line, trailing `\n`. Returns `''` for empty input (the recorder's `flush` already guards against calling it that way, but the function handles it safely).
 
-## Tests (12 passing, ~28ms total)
+## Tests (12 passing, ~26ms total)
 
-`src/flight-recorder.test.ts` (10 tests, ~16ms — no ky backoff at this seam)
+`src/flight-recorder.test.ts` (10 tests, ~15ms — no ky backoff at this seam)
 1. `'records an impression'` — `record()` accepts an `ImpressionEvent`
 2. `'records a custom event'` — `record()` accepts a `CustomEvent`
 3. `'can flush with no events'` — empty-buffer guard
@@ -54,7 +56,7 @@ Each line is a future TDD step:
 
 - **Transport failure handling.** If `fetch` rejects, the spliced events vanish. No test pins down the desired behavior.
 - **5xx response handling.** `fetch` doesn't reject on a non-2xx status; we'd need `response.ok` and re-queue. Not handled.
-- **Concurrency guard.** Auto-flush fires `void this.flush()` even if a previous flush is still in flight. Reference design says one-in-flight only — no test pins this down yet.
+- **Periodic flushes serialize** (scheduler awaits handler). Manual `flush()` and size-trigger `void this.flush()` can still race with the periodic — matches the trade-off `unleash-client-node` makes. `close()` does not await an earlier in-flight HTTP. If a real test demands stricter guarantees, drive them in then.
 - **Wire envelope.** Shipped events currently lack `schemaVersion`, `timestamp`, `source`, `appName`, `environment` (per reference design). No test pins this down.
 - ~~**`close()` does not block further `record()` calls.**~~ Done — `record()` and `flush()` early-return after close (test 10).
 - **`keepalive: true`** option on `flush()` for browser unload.

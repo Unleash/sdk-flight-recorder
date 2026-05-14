@@ -72,22 +72,47 @@ The `persistentFailure` payload exposes `droppedEventCount: number`, not the ful
 
 Retry / backoff / ky-specific behavior is tested in `src/http-client.test.ts`. `src/flight-recorder.test.ts` only tests recorder-level behavior (buffering, auto-flush, mid-flush atomicity, `onError` firing on transport failure) using a `fakeFetch` that does whatever the test needs in a single call. *Why:* before this split, `flight-recorder.test.ts` ran in ~614ms because two retry tests paid ky's ~300ms backoff each. After moving the retry test to `http-client.test.ts` and rewriting the `onError` test to use `retries: 0` (one throw, no backoff), the recorder suite runs in ~14ms. The slow test still exists — but it lives at the level where retry *is* the contract being tested, not where it's an implementation detail leaking through a stacked integration.
 
-## `Scheduler.stop()` + `getStatus()`; `close()` stops + final-flushes
+## Periodic flushes serialize via the scheduler awaiting its handler
+
+`Scheduler.runEvery` takes a `handler: () => Promise<void>` and the scheduler is contractually required to await it before scheduling the next tick. The recorder passes `() => this.flush()` — and that's the entirety of "one periodic flush at a time." No in-flight tracking on the recorder side.
 
 ```ts
-type SchedulerStatus = 'active' | 'stopped';
-type Scheduler = {
-  runEvery(ms: number, handler: () => void): void;
-  stop(): void;
-  getStatus(): SchedulerStatus;
-};
+// Today:
+this.scheduler.runEvery(flushAfterMs, () => this.flush());
 ```
 
-`FlightRecorder.close()` calls `this.scheduler.stop()` to stop the periodic loop, then `await this.flush()` for the final drain. *Why:* graceful shutdown is the production-driving use case (SIGTERM in BE, page unload in FE). Putting `stop` and `getStatus` directly on the scheduler keeps the seam small (one collaborator) and avoids per-call-site bookkeeping a returned-handle approach would force the recorder to do.
+In a production scheduler this maps to self-chained `setTimeout`: `setTimeout(() => handler().then(scheduleNext))`. The next tick is scheduled *after* the handler's promise resolves. No `setInterval` — `setInterval` doesn't naturally serialize.
 
-`getStatus()` returns the explicit `'active' | 'stopped'` union rather than a boolean (`isActive`/`isStopped`) because a named status reads more clearly in assertions (`expect(scheduler.getStatus()).toBe('stopped')`) and leaves room to add more states (`'idle'`?) without flipping boolean semantics. It's now on the public `Scheduler` interface — production implementations must surface their state the same way.
+`FakeScheduler.advance(ms)` is async and awaits the handler between iterations — so tests can `await scheduler.advance(2000)` and skip the trailing `await yieldEventLoop()` they used to need.
 
-The scheduler is one-interval-only by contract: `runEvery` throws if called a second time. *Why:* `FlightRecorder` registers at most one periodic flush per instance, so the "list of intervals" was defensive flexibility nothing exercised. Throwing on a second call catches misuse instead of silently replacing or accumulating.
+*Why this works (and why we chose it):* this is the pattern Unleash's own Node SDK (`unleash-client-node`) uses for its metrics flushing — chained `setTimeout` with `await` between ticks, no explicit mutex. The pattern is production-proven there. It addresses the most common "in-flight at shutdown" case (a periodic that's mid-HTTP when something else triggers close) without adding in-flight promise tracking to the recorder. The size-trigger path (`void this.flush()` inside `record`) and any manual `flush()` calls can still race — same trade-off the Unleash SDK makes.
+
+## Shape: plain `flush()` + `close()`, no in-flight tracking
+
+```ts
+async flush() {
+  if (this.status === 'closed') return;
+  if (this.buffer.length === 0) return;
+  const toSend = this.buffer.splice(0);
+  try { await this.httpClient.post(toNdjson(toSend)); }
+  catch (err) { this.onError?.({ reason: 'persistentFailure', droppedEventCount: toSend.length, error: err }); }
+}
+
+async close() {
+  if (this.status === 'closed') return;
+  this.scheduler.stop();
+  await this.flush();
+  this.status = 'closed';   // set AFTER flush, so flush()'s own status guard doesn't early-return
+}
+```
+
+State is just: `buffer`, `status: 'open' | 'closed'`. No `flushInFlight`, no worker, no `kickWorker`.
+
+*Why this shape:* an earlier worker-loop design with `kickWorker` / `workInProgress` was too clever for the small number of guarantees we actually wanted. The simple version is direct: `flush()` splices and posts; `close()` stops the scheduler, runs a final `flush()`, then marks closed. The ordering in `close()` is deliberate — `status = 'closed'` happens *after* the drain so `flush()`'s own status guard doesn't skip the final send.
+
+*What this gives up:* no guarantee that `close()` awaits HTTPs from earlier in-flight flushes (e.g., a periodic tick's send that's still pending when `close()` is called). Concurrent flushes can race. For the dogfooding scope this is acceptable; if it becomes a real problem we'll drive in a test and add the smallest mechanism needed at that point — not before.
+
+The scheduler stays narrow: `{ runEvery, stop, getStatus }`. `getStatus()` returns `'active' | 'stopped'` (union, not boolean).
 
 ## `RecorderStatus = 'open' | 'closed'`; everything is a no-op after close
 

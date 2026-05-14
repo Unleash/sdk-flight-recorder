@@ -89,6 +89,14 @@ type Scheduler = {
 
 The scheduler is one-interval-only by contract: `runEvery` throws if called a second time. *Why:* `FlightRecorder` registers at most one periodic flush per instance, so the "list of intervals" was defensive flexibility nothing exercised. Throwing on a second call catches misuse instead of silently replacing or accumulating.
 
+## `RecorderStatus = 'open' | 'closed'`; everything is a no-op after close
+
+`FlightRecorder` tracks its lifecycle as a private `status: 'open' | 'closed'` union (not a boolean — same reason `SchedulerStatus` is a union). Once `close()` finishes, `record()` and `flush()` early-return immediately, so further calls don't buffer or POST. `close()` is idempotent (calling it twice is a no-op).
+
+`close()` sets `status = 'closed'` *after* its final `flush()` — otherwise the final flush would early-return on its own guard. This means: between `close()` being invoked and its final flush settling, any `record()` calls still buffer (and may even trigger a size-flush). That's intentional — the contract is "after `close()` *returns*, the recorder is dead." Concurrent `record()` during the close window is user error; we don't try to recover from it.
+
+The status is not exposed publicly. If a caller ever needs to ask "is this closed?", we'll add a getter then.
+
 ## `retryDelay` option on `HttpClient` — test escape hatch, ky default in production
 
 `HttpClientOptions.retryDelay?: (attemptCount: number) => number` is an optional pass-through to ky's `retry.delay`. When unset (production default), ky's exponential backoff applies. Tests pass `retryDelay: () => 0` so the retry-coverage test runs in ~10ms instead of ~310ms. *Why:* the HttpClient retry test covers a real choice we make (opting POST into ky's retry list via `methods: ['post']`), and renaming it from `'retries the failed fetch after one attempt and then succeeds'` to `'retries POST requests when retries is configured'` makes that value visible. But paying ~300ms per CI run for that single assertion is wasteful — the delay is incidental to what the test asserts. Exposing `retryDelay` lets the test override it without changing production behavior. The option is not surfaced on `FlightRecorderOptions` yet; if a production caller ever needs a custom curve, add it then with the test that demands it (per [[feedback-design-taste]]).

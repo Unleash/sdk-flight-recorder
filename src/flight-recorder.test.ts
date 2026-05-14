@@ -245,6 +245,31 @@ describe('FlightRecorder', () => {
         ]);
     });
 
+    it('ignores record and flush calls after close', async () => {
+        let fetchCalls = 0;
+        const fakeFetch: typeof fetch = async () => {
+            fetchCalls++;
+            return new Response();
+        };
+        const recorder = createRecorder({
+            fetch: fakeFetch,
+            batch: { flushAt: 1 },
+        });
+
+        await recorder.close();
+        recorder.record({
+            eventType: 'isEnabled',
+            eventId: '99999999-9999-4999-8999-999999999999',
+            context: {},
+            enabled: true,
+            featureName: 'after-close',
+        });
+        await recorder.flush();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
+        expect(fetchCalls).toBe(0);
+    });
+
     it('flushes pending events and stops the periodic flush on close', async () => {
         let fetchCalls = 0;
         const fakeFetch: typeof fetch = async () => {

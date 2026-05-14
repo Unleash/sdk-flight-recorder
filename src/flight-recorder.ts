@@ -26,6 +26,8 @@ export type ErrorInfo = {
     error: unknown;
 };
 
+type RecorderStatus = 'open' | 'closed';
+
 export type FlightRecorderOptions = {
     url: string;
     clientKey: string;
@@ -48,6 +50,7 @@ export class FlightRecorder {
     private readonly flushAfterMs: number | undefined;
     private readonly onError: ((info: ErrorInfo) => void) | undefined;
     private readonly buffer: Array<ImpressionEvent | CustomEvent> = [];
+    private status: RecorderStatus = 'open';
 
     constructor(options: FlightRecorderOptions) {
         this.httpClient = createHttpClient({
@@ -71,6 +74,7 @@ export class FlightRecorder {
     }
 
     record(event: ImpressionEvent | CustomEvent): void {
+        if (this.status === 'closed') return;
         this.buffer.push(event);
         if (this.flushAt !== undefined && this.buffer.length >= this.flushAt) {
             void this.flush();
@@ -78,6 +82,7 @@ export class FlightRecorder {
     }
 
     async flush(): Promise<void> {
+        if (this.status === 'closed') return;
         if (this.buffer.length === 0) return;
         const toSend = this.buffer.splice(0);
         const body = toNdjson(toSend);
@@ -93,7 +98,9 @@ export class FlightRecorder {
     }
 
     async close(): Promise<void> {
+        if (this.status === 'closed') return;
         this.scheduler.stop();
         await this.flush();
+        this.status = 'closed';
     }
 }

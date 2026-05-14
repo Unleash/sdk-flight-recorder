@@ -25,9 +25,9 @@ Last updated: 2026-05-14
 `src/ndjson.ts`
 - `toNdjson(items: ReadonlyArray<unknown>): string` — generic NDJSON serializer. One JSON object per line, trailing `\n`. Returns `''` for empty input (the recorder's `flush` already guards against calling it that way, but the function handles it safely).
 
-## Tests (11 passing, ~27ms total)
+## Tests (12 passing, ~28ms total)
 
-`src/flight-recorder.test.ts` (9 tests, ~16ms — no ky backoff at this seam)
+`src/flight-recorder.test.ts` (10 tests, ~16ms — no ky backoff at this seam)
 1. `'records an impression'` — `record()` accepts an `ImpressionEvent`
 2. `'records a custom event'` — `record()` accepts a `CustomEvent`
 3. `'can flush with no events'` — empty-buffer guard
@@ -37,6 +37,7 @@ Last updated: 2026-05-14
 7. `'flushes automatically after the configured time elapses'` — time-based auto-flush via periodic `scheduler.runEvery(flushAfterMs, ...)`. Counts `fetch` calls before/after `scheduler.advance(flushAfterMs)`
 8. `'invokes onError when the transport fails'` — `fakeFetch` throws once, `retry: { retries: 0 }`, asserts `onError` called with `{ reason: 'persistentFailure', droppedEventCount: 1 }` and that an `error` is attached. Does not assert error type — that's ky's concern.
 9. `'flushes pending events and stops the periodic flush on close'` — records an event, calls `close()`. One assertion checks the event was flushed (`fetchCalls === 1`); another checks `scheduler.getStatus() === 'stopped'`.
+10. `'ignores record and flush calls after close'` — calls `close()` on an empty recorder, then `record(event)` (which would normally trigger a size-flush at `flushAt: 1`), then explicit `flush()`. After settling microtasks via `setImmediate`, asserts `fetchCalls === 0` — neither the size-trigger nor the manual flush hit the network.
 
 `src/http-client.test.ts` (1 test, ~10ms — backoff bypassed via `retryDelay: () => 0`)
 9. `'retries POST requests when retries is configured'` — verifies our two retry choices flow through to ky: `limit: options.retries` and `methods: ['post']` (POST is excluded from ky's default retry list). Fake fetch throws once, then succeeds; asserts fetch called twice.
@@ -55,7 +56,7 @@ Each line is a future TDD step:
 - **5xx response handling.** `fetch` doesn't reject on a non-2xx status; we'd need `response.ok` and re-queue. Not handled.
 - **Concurrency guard.** Auto-flush fires `void this.flush()` even if a previous flush is still in flight. Reference design says one-in-flight only — no test pins this down yet.
 - **Wire envelope.** Shipped events currently lack `schemaVersion`, `timestamp`, `source`, `appName`, `environment` (per reference design). No test pins this down.
-- **`close()` does not block further `record()` calls.** Events recorded after close go into the buffer with nothing to flush them (scheduler stopped, size-trigger possibly still firing). Semantics undefined; no test pins this down.
+- ~~**`close()` does not block further `record()` calls.**~~ Done — `record()` and `flush()` early-return after close (test 10).
 - **`keepalive: true`** option on `flush()` for browser unload.
 - **Dedup of identical buffered events.**
 - **Custom event end-to-end test.** Type accepts `CustomEvent`, but no test asserts it actually reaches the wire.

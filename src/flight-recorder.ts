@@ -50,6 +50,7 @@ export class FlightRecorder {
     private readonly maxBufferSize: number | undefined;
     private readonly onError: ((info: ErrorInfo) => void) | undefined;
     private readonly buffer: Array<ImpressionEvent | CustomEvent> = [];
+    private readonly seen = new Set<string>();
     private status: RecorderStatus = 'open';
 
     constructor(options: FlightRecorderOptions) {
@@ -74,10 +75,16 @@ export class FlightRecorder {
 
     record(event: ImpressionEvent | CustomEvent): void {
         if (this.status === 'closed') return;
-        if (this.maxBufferSize !== undefined && this.buffer.length >= this.maxBufferSize) {
+        const key = JSON.stringify(event);
+        if (this.seen.has(key)) return;
+        if (
+            this.maxBufferSize !== undefined &&
+            this.buffer.length >= this.maxBufferSize
+        ) {
             this.onError?.({ reason: 'queueFull', droppedEventCount: 1 });
             return;
         }
+        this.seen.add(key);
         this.buffer.push(event);
         if (this.flushAt !== undefined && this.buffer.length >= this.flushAt) {
             void this.flush();
@@ -88,6 +95,7 @@ export class FlightRecorder {
         if (this.status === 'closed') return;
         if (this.buffer.length === 0) return;
         const toSend = this.buffer.splice(0);
+        this.seen.clear();
         const body = toNdjson(toSend);
         try {
             await this.httpClient.post(body, { keepalive: options?.keepalive });

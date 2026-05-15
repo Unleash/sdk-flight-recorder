@@ -70,11 +70,12 @@ Each line is a future TDD step:
 - ~~**Wire envelope stamping.**~~ **Not needed** — the Unleash JS SDK already emits `timestamp`, `appName` (in `context`), and `environment` (in `context`). The recorder passes events through verbatim. `schemaVersion` and `source` explicitly dropped.
 - ~~**`keepalive: true`** option on `flush()` / `close()` for browser unload.~~ Done — `close()` flushes with `keepalive: true`; `flush(options?)` accepts it on demand.
 - ~~**Buffer cap / `onError({ reason: 'queueFull' })`**~~ Done — `batch.maxBufferSize` drops new events and fires `onError({ reason: 'queueFull', droppedEventCount: 1 })`.
-- **Dedup of identical buffered events.**
+- ~~**Dedup of identical buffered events.**~~ Done — `JSON.stringify` key, "first seen wins" per flush window, seen set cleared on splice.
 
 ## Next test candidates
 
 - **`CustomEvent` realignment** — rename `name` → `eventName`, add `timestamp: string`. Mirrors what we just did for `ImpressionEvent`. Small cascade fix.
-- **Dedup** — in-batch dedup via `JSON.stringify(event)` key; "first seen wins" within one flush window, reset on flush.
+- **Production Scheduler** — chained `setTimeout` impl of the `Scheduler` interface.
+- **Public entry point + CI** — `src/index.ts` re-exports, `.github/workflows/ci.yml`.
 - **Production Scheduler** — chained `setTimeout` impl of the `Scheduler` interface.
 - **Public entry point + CI** — `src/index.ts` re-exports, `.github/workflows/ci.yml`.

@@ -194,11 +194,11 @@ describe('FlightRecorder', () => {
             batch: { flushAt: 2 },
         });
 
-        recorder.record(defaultImpressionEvent);
+        recorder.record({ ...defaultImpressionEvent, featureName: 'flag-1' });
         await new Promise<void>((resolve) => setImmediate(resolve));
         expect(fetchCalls).toBe(0);
 
-        recorder.record(defaultImpressionEvent);
+        recorder.record({ ...defaultImpressionEvent, featureName: 'flag-2' });
         await new Promise<void>((resolve) => setImmediate(resolve));
         expect(fetchCalls).toBe(1);
     });
@@ -289,9 +289,82 @@ describe('FlightRecorder', () => {
 
         await recorder.flush();
 
-        expect(errors).toMatchObject([{ reason: 'queueFull', droppedEventCount: 1 }]);
+        expect(errors).toMatchObject([
+            { reason: 'queueFull', droppedEventCount: 1 },
+        ]);
         const [snapshot] = await Promise.all(snapshots);
-        expect(snapshot!.body).toBe(`${JSON.stringify(event1)}\n${JSON.stringify(event2)}\n`);
+        expect(snapshot!.body).toBe(
+            `${JSON.stringify(event1)}\n${JSON.stringify(event2)}\n`,
+        );
+    });
+
+    it('deduplicates identical events within one flush window', async () => {
+        const snapshots: Array<Promise<RequestSnapshot>> = [];
+        const fakeFetch: typeof fetch = async (input) => {
+            snapshots.push(snapshotRequest(input as Request));
+            return new Response();
+        };
+        const recorder = createRecorder({ fetch: fakeFetch });
+
+        recorder.record(defaultImpressionEvent);
+        recorder.record(defaultImpressionEvent);
+        await recorder.flush();
+
+        const [snapshot] = await Promise.all(snapshots);
+        expect(snapshot!.body).toBe(
+            `${JSON.stringify(defaultImpressionEvent)}\n`,
+        );
+    });
+
+    it('sends events with the same featureName but different context separately', async () => {
+        const snapshots: Array<Promise<RequestSnapshot>> = [];
+        const fakeFetch: typeof fetch = async (input) => {
+            snapshots.push(snapshotRequest(input as Request));
+            return new Response();
+        };
+        const recorder = createRecorder({ fetch: fakeFetch });
+
+        const forUser1 = {
+            ...defaultImpressionEvent,
+            context: { userId: 'user-1' },
+        };
+        const forUser2 = {
+            ...defaultImpressionEvent,
+            context: { userId: 'user-2' },
+        };
+
+        recorder.record(forUser1);
+        recorder.record(forUser2);
+        await recorder.flush();
+
+        const [snapshot] = await Promise.all(snapshots);
+        expect(snapshot!.body).toBe(
+            `${JSON.stringify(forUser1)}\n${JSON.stringify(forUser2)}\n`,
+        );
+    });
+
+    it('deduplicates only within a flush window, not across flushes', async () => {
+        const snapshots: Array<Promise<RequestSnapshot>> = [];
+        const fakeFetch: typeof fetch = async (input) => {
+            snapshots.push(snapshotRequest(input as Request));
+            return new Response();
+        };
+        const recorder = createRecorder({ fetch: fakeFetch });
+
+        recorder.record(defaultImpressionEvent);
+        await recorder.flush();
+
+        recorder.record(defaultImpressionEvent);
+        await recorder.flush();
+
+        const results = await Promise.all(snapshots);
+        expect(results).toHaveLength(2);
+        expect(results[0]!.body).toBe(
+            `${JSON.stringify(defaultImpressionEvent)}\n`,
+        );
+        expect(results[1]!.body).toBe(
+            `${JSON.stringify(defaultImpressionEvent)}\n`,
+        );
     });
 
     it('sends remaining events with keepalive on close', async () => {

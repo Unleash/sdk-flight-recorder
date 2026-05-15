@@ -138,6 +138,16 @@ The reference design's envelope (`schemaVersion`, `source`, `appName`, `environm
 
 *Why:* the dominant data-loss path for the Unleash admin UI FE is `beforeunload`/`pagehide` — the browser cancels in-flight `fetch` requests that weren't started with `keepalive: true`. Wiring `keepalive` at `close()` rather than everywhere keeps normal flushes unaffected. `HttpClient.post` accepts `options?: { keepalive?: boolean }` inline (no separate named type) to keep the surface minimal; the factory parameters were destructured in `createHttpClient` to avoid the inner `options` parameter shadowing the outer factory `options`.
 
+## In-batch dedup via `JSON.stringify`; seen set resets on flush
+
+`record()` stringifies each incoming event and checks a `Set<string>`. Duplicates within the current flush window are silently dropped — "first seen wins." The set is cleared atomically alongside `buffer.splice(0)` at the start of `flush()`, so the same event can be recorded again after a flush.
+
+*Why `JSON.stringify`:* simple to reason about, no compound key construction, no allow-list. Key-order sensitivity is accepted — the Unleash JS SDK emits events with stable key ordering per call site, so two events from the same call site with the same inputs always stringify identically. When this assumption breaks, a test will say so.
+
+*Why clear on splice, not on send success:* the splice and the clear are both the "drain" step — if we waited for the send to succeed before clearing, a failed flush would leave the seen set stale (events would never be re-recordable). Clearing on splice keeps the seen set aligned with the buffer state at all times.
+
+*Why dedup before the buffer cap check:* a duplicate that would exceed the cap shouldn't fire `onError({ reason: 'queueFull' })` — it's not a capacity problem, it's a repeat. Checking `seen` first keeps cap errors meaningful.
+
 ## Buffer cap drops new events; `queueFull` joins the `ErrorInfo` union
 
 `batch.maxBufferSize` is an opt-in ceiling on `record()`. When the buffer is already at capacity, the incoming event is dropped (not the oldest) and `onError({ reason: 'queueFull', droppedEventCount: 1 })` is fired. `ErrorInfo` is now a discriminated union: `'persistentFailure'` carries `error: unknown`; `'queueFull'` does not.

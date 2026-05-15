@@ -83,13 +83,29 @@ this.scheduler.runEvery(flushAfterMs, () => this.flush());
 
 In a production scheduler this maps to self-chained `setTimeout`: `setTimeout(() => handler().then(scheduleNext))`. The next tick is scheduled *after* the handler's promise resolves. No `setInterval` — `setInterval` doesn't naturally serialize.
 
-`FakeScheduler.advance(ms)` is async and awaits the handler between iterations — so tests can `await scheduler.advance(2000)` and skip the trailing `await yieldEventLoop()` they used to need.
+`ControllableTimer.advance(ms)` is async and awaits the handler between ticks — so tests can `await timer.advance(2000)` and skip the trailing `await yieldEventLoop()` they used to need.
 
 *Why this works (and why we chose it):* this is the pattern Unleash's own Node SDK (`unleash-client-node`) uses for its metrics flushing — chained `setTimeout` with `await` between ticks, no explicit mutex. The pattern is production-proven there. It addresses the most common "in-flight at shutdown" case (a periodic that's mid-HTTP when something else triggers close) without adding in-flight promise tracking to the recorder. The size-trigger path (`void this.flush()` inside `record`) and any manual `flush()` calls can still race — same trade-off the Unleash SDK makes.
 
 ## `Scheduler.stop()` is async and awaits the in-flight handler
 
 `stop(): Promise<void>` — not `void`. A `Scheduler` tracks the currently running handler invocation and `stop()` awaits it before resolving. *Why:* callers (notably `FlightRecorder.close()`) want a single await-point that means "no more handler invocations are running or will start." Without it, `close()` could cancel the next tick but the current tick's `flush()` would still be racing against `close()`'s own final flush. With async stop, `await this.scheduler.stop()` in `close()` resolves only when any periodic flush has fully settled — then `close()` runs its own final flush. No overlap. Pinned by `fake-scheduler.test.ts > 'stop awaits an in-flight handler before resolving'`.
+
+## One scheduler; the `Timer` is the injected seam
+
+There is exactly one `Scheduler` implementation — `TimerScheduler`. It takes a required `Timer` collaborator (`src/timer.ts`): `schedule(ms, callback) => cancel`, a one-shot delayed callback. Production wires `systemTimer` (`setTimeout`/`clearTimeout`); tests wire a `ControllableTimer` whose pending callback fires only on `advance(ms)`. There is no `FakeScheduler` — a test that needs to drive time builds `new TimerScheduler(new ControllableTimer())` and advances the timer directly. The scheduler *algorithm* (once-guard, status, self-chaining, in-flight tracking) exists once; "fake" vs "real" is purely which `Timer` is injected.
+
+*Why this over a shared base / core:* an earlier `SchedulerCore` extraction was reverted as too much indirection. The seam that actually differs between test and production is not "half of a scheduler" — it is *the timer itself*. Injecting `Timer` removes the duplication by deleting the second scheduler outright, rather than by factoring a shared fragment out of two. A `FakeScheduler` wrapper (bundling scheduler + timer into one object) was also tried and dropped — it just added a delegation hop; `timer.advance(ms)` is both less code and more honest than `scheduler.advance(ms)` (a scheduler doesn't advance itself, time does).
+
+The one subtlety: `TimerScheduler`'s timer callback **returns** its in-flight handler promise. `systemTimer` drops that return (`setTimeout` is fire-and-forget — correct for production). `ControllableTimer.advance` instead `await`s it, so the scheduler has re-armed the next tick before `advance` loops — no microtask-flushing guesswork. A gated handler simply parks `advance` until the gate opens. `Timer` is required, not defaulted (no bastard injection — the app wires `new TimerScheduler(systemTimer)` explicitly).
+
+## `TimerScheduler` is tested with `ControllableTimer` — no fake timers
+
+`fake-scheduler.test.ts` (named for git-history continuity with the file it replaced) is a plain, flat `describe` of five `it`s — no `describe.each`, no harness, no `vi.useFakeTimers()`. Each test builds `new TimerScheduler(new ControllableTimer())` and drives time with `timer.advance(ms)`. Behaviours pinned: runs-per-tick, `runEvery`-twice throws, status lifecycle, no-run-after-stop, stop-awaits-in-flight.
+
+*Why no `vi.useFakeTimers()`:* `ControllableTimer` already *is* a deterministic, in-memory clock — mocking the global timer on top of it would be redundant and makes tests harder to read. `vi.useFakeTimers()` only earns its keep when testing `systemTimer` (real `setTimeout`) directly; we don't — `systemTimer` is six lines of glue over `setTimeout`/`clearTimeout`, exercised in real use, not worth a fake-timer unit test. The whole `Scheduler` algorithm is covered through `ControllableTimer`, which faithfully drives it.
+
+The in-flight test needs no `handlerStarted` signal: `timer.advance(ms)` runs synchronously into the handler (parking at the gate) before returning, so the scheduler's `inFlight` is already set when the next line calls `stop()`.
 
 ## Shape: plain `flush()` + `close()`, no in-flight tracking
 

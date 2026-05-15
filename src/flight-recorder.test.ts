@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { NetworkError } from 'ky';
 import type { Scheduler } from './scheduler.js';
-import { FakeScheduler } from './fake-scheduler.js';
+import { ControllableTimer } from './timer.js';
+import { TimerScheduler } from './fake-scheduler.js';
 import {
     FlightRecorder,
     type ErrorInfo,
@@ -207,17 +208,17 @@ describe('FlightRecorder', () => {
             fetchCalls++;
             return new Response();
         };
-        const scheduler = new FakeScheduler();
+        const timer = new ControllableTimer();
         const recorder = createRecorder({
             fetch: fakeFetch,
-            scheduler,
+            scheduler: new TimerScheduler(timer),
             batch: { flushAfterMs: 2000, flushAt: 2 },
         });
 
         recorder.record(defaultImpressionEvent);
         expect(fetchCalls).toBe(0);
 
-        await scheduler.advance(2000);
+        await timer.advance(2000);
 
         expect(fetchCalls).toBe(1);
     });
@@ -269,7 +270,7 @@ describe('FlightRecorder', () => {
             fetchCalls++;
             return new Response();
         };
-        const scheduler = new FakeScheduler();
+        const scheduler = new TimerScheduler(new ControllableTimer());
         const recorder = createRecorder({
             fetch: fakeFetch,
             scheduler,

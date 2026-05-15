@@ -2,7 +2,7 @@
 
 Snapshot of where the port stands. **This file goes stale fast** — update it each TDD step or treat it as a handoff snapshot only.
 
-Last updated: 2026-05-15 (async `Scheduler.stop()` + `FakeScheduler` tests)
+Last updated: 2026-05-15 (one `TimerScheduler` + injected `Timer`; plain tests, no fake timers)
 
 ## What's built
 
@@ -21,8 +21,11 @@ Last updated: 2026-05-15 (async `Scheduler.stop()` + `FakeScheduler` tests)
 `src/scheduler.ts`
 - `Scheduler = { runEvery(ms, handler: () => Promise<void>): void; stop(): Promise<void>; getStatus(): SchedulerStatus }` where `SchedulerStatus = 'active' | 'stopped'`. The handler is async; the scheduler must await it before scheduling the next tick (self-chained-setTimeout pattern, matching `unleash-client-node`). `stop()` is async and resolves only after any in-flight handler invocation has settled.
 
-`src/fake-scheduler.ts`
-- `FakeScheduler implements Scheduler` for tests. One-interval-only: a second call to `runEvery` throws. `advance(ms): Promise<void>` is async — awaits the handler between iterations and assigns each invocation to `inFlight` so a concurrent `stop()` can await it. Tests use `await scheduler.advance(...)`. Tracks a top-level `status` field; reports it via `getStatus()`. Non-cumulative across `advance` calls.
+`src/timer.ts`
+- `Timer` — the injected seam: `schedule(ms, callback) => cancel`, a one-shot delayed callback. Two impls: `systemTimer` (production, `setTimeout`/`clearTimeout`) and `ControllableTimer` (tests, in-memory with one `pending` slot; `advance(ms)` fires due callbacks, awaiting each).
+
+`src/fake-scheduler.ts` (filename kept for git-history continuity; exports `TimerScheduler`)
+- `TimerScheduler implements Scheduler` — the *only* scheduler. Takes a required `Timer` in the constructor. Self-chains via `timer.schedule` (`scheduleNext`); the timer callback returns the in-flight handler promise so `ControllableTimer` can await it. Tracks `inFlight` so `stop()` awaits a running handler, and cancels the pending tick. One-interval-only (second `runEvery` throws). Tests that drive time use `new TimerScheduler(new ControllableTimer())` and advance the timer directly — there is no `FakeScheduler`.
 
 `src/ndjson.ts`
 - `toNdjson(items: ReadonlyArray<unknown>): string` — generic NDJSON serializer. One JSON object per line, trailing `\n`. Returns `''` for empty input (the recorder's `flush` already guards against calling it that way, but the function handles it safely).
@@ -37,7 +40,7 @@ Last updated: 2026-05-15 (async `Scheduler.stop()` + `FakeScheduler` tests)
 5. `'preserves the timestamp from a recorded impression on the wire'` — type alignment: asserts `timestamp` passes through verbatim. Pinned after aligning `ImpressionEvent` with the Unleash JS SDK's emit shape.
 6. `'an event recorded mid-flush is sent on the next flush'` — atomicity: events recorded during an in-flight `fetch` are preserved for the next flush
 7. `'flushes automatically when the buffer reaches the configured size'` — size-based auto-flush via `batch.flushAt`. Counts `fetch` calls before/after threshold
-8. `'flushes automatically after the configured time elapses'` — time-based auto-flush via periodic `scheduler.runEvery(flushAfterMs, ...)`. Counts `fetch` calls before/after `scheduler.advance(flushAfterMs)`
+8. `'flushes automatically after the configured time elapses'` — time-based auto-flush via periodic `scheduler.runEvery(flushAfterMs, ...)`. Counts `fetch` calls before/after `timer.advance(flushAfterMs)` (a `TimerScheduler` on a `ControllableTimer`)
 9. `'invokes onError when the transport fails'` — `fakeFetch` throws once, `retry: { retries: 0 }`, asserts `onError` called with `{ reason: 'persistentFailure', droppedEventCount: 1 }` and that an `error` is attached. Does not assert error type — that's ky's concern.
 10. `'flushes pending events and stops the periodic flush on close'` — records an event, calls `close()`. One assertion checks the event was flushed (`fetchCalls === 1`); another checks `scheduler.getStatus() === 'stopped'`.
 11. `'ignores record and flush calls after close'` — calls `close()` on an empty recorder, then `record(event)` (which would normally trigger a size-flush at `flushAt: 1`), then explicit `flush()`. After settling microtasks via `setImmediate`, asserts `fetchCalls === 0` — neither the size-trigger nor the manual flush hit the network.
@@ -48,12 +51,12 @@ Last updated: 2026-05-15 (async `Scheduler.stop()` + `FakeScheduler` tests)
 `src/ndjson.test.ts` (1 test)
 13. `'emits one JSON object per line with a trailing newline'`
 
-`src/fake-scheduler.test.ts` (5 tests)
-14. `'runs the handler once per interval inside advance'` — `advance(350)` with interval 100 triggers 3 calls.
+`src/fake-scheduler.test.ts` (5 tests — plain flat `describe`, no fake timers; each test builds `new TimerScheduler(new ControllableTimer())` and drives `timer.advance(ms)`)
+14. `'runs the handler on every interval tick'` — `advance(300)` with interval 100 triggers 3 calls.
 15. `'throws when runEvery is called twice'` — one-interval-only invariant.
 16. `'reports active after runEvery and stopped after stop'` — `getStatus()` lifecycle.
-17. `'does not invoke the handler after stop'` — `stop()` before `advance()` keeps call count at 0.
-18. `'stop awaits an in-flight handler before resolving'` — handler awaits a manually-controlled gate; `stop()` does not resolve until the gate releases. Pins the async-stop contract.
+17. `'does not run the handler after stop'` — `stop()` before `advance()` keeps call count at 0.
+18. `'stop awaits an in-flight handler before resolving'` — handler gates; `stop()` resolves only after the gate releases. Asserts the ordering `['handler finished', 'stop resolved']`.
 
 Test conveniences in `flight-recorder.test.ts`:
 - Module-level `defaultUrl`, `defaultFetch`, `defaultClientKey`, `defaultTimestamp`, and a `createRecorder(overrides?)` factory plus `defaultImpressionEvent`. Tests that don't exercise a particular input rely on these defaults; tests that do override with values visibly different from defaults.
@@ -64,7 +67,7 @@ Each line is a future TDD step:
 
 - **Transport failure handling.** If `fetch` rejects, the spliced events vanish. No test pins down the desired behavior.
 - **5xx response handling.** `fetch` doesn't reject on a non-2xx status; we'd need `response.ok` and re-queue. Not handled.
-- **Manual `flush()` and size-trigger `void this.flush()` can still race** with the periodic — matches the trade-off `unleash-client-node` makes. (`close()` *does* await the periodic handler now via async `scheduler.stop()` — pinned by test 18.) If a real test demands stricter guarantees for the non-periodic paths, drive them in then.
+- **Manual `flush()` and size-trigger `void this.flush()` can still race** with the periodic — matches the trade-off `unleash-client-node` makes. (`close()` *does* await the periodic handler now via async `scheduler.stop()` — pinned by the contract test's `'stop awaits an in-flight handler'`.) If a real test demands stricter guarantees for the non-periodic paths, drive them in then.
 - **`CustomEvent` type realignment.** SDK emits `eventName: string` (not `name`) and includes `timestamp`. Our `CustomEvent` type has `name: string` — a rename is needed before SDK custom events can be wired without casting. Separate step.
 - ~~**`close()` does not block further `record()` calls.**~~ Done — `record()` and `flush()` early-return after close (test 11).
 - ~~**Wire envelope stamping.**~~ **Not needed** — the Unleash JS SDK already emits `timestamp`, `appName` (in `context`), and `environment` (in `context`). The recorder passes events through verbatim. `schemaVersion` and `source` explicitly dropped.

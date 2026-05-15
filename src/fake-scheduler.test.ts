@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { FakeScheduler } from './fake-scheduler.js';
+import { ControllableTimer } from './timer.js';
+import { TimerScheduler } from './fake-scheduler.js';
 
 const createGate = () => {
     let open!: () => void;
@@ -9,27 +10,29 @@ const createGate = () => {
     return { open, opened };
 };
 
-describe('FakeScheduler', () => {
-    it('runs the handler once per interval inside advance', async () => {
+describe('TimerScheduler', () => {
+    it('runs the handler on every interval tick', async () => {
+        const timer = new ControllableTimer();
+        const scheduler = new TimerScheduler(timer);
         let calls = 0;
-        const scheduler = new FakeScheduler();
         scheduler.runEvery(100, async () => {
             calls++;
         });
 
-        await scheduler.advance(350);
+        await timer.advance(300);
 
         expect(calls).toBe(3);
+        await scheduler.stop();
     });
 
     it('throws when runEvery is called twice', () => {
-        const scheduler = new FakeScheduler();
+        const scheduler = new TimerScheduler(new ControllableTimer());
         scheduler.runEvery(100, async () => {});
         expect(() => scheduler.runEvery(100, async () => {})).toThrow();
     });
 
     it('reports active after runEvery and stopped after stop', async () => {
-        const scheduler = new FakeScheduler();
+        const scheduler = new TimerScheduler(new ControllableTimer());
         expect(scheduler.getStatus()).toBe('stopped');
         scheduler.runEvery(100, async () => {});
         expect(scheduler.getStatus()).toBe('active');
@@ -37,34 +40,37 @@ describe('FakeScheduler', () => {
         expect(scheduler.getStatus()).toBe('stopped');
     });
 
-    it('does not invoke the handler after stop', async () => {
+    it('does not run the handler after stop', async () => {
+        const timer = new ControllableTimer();
+        const scheduler = new TimerScheduler(timer);
         let calls = 0;
-        const scheduler = new FakeScheduler();
         scheduler.runEvery(100, async () => {
             calls++;
         });
 
         await scheduler.stop();
-        await scheduler.advance(500);
+        await timer.advance(500);
 
         expect(calls).toBe(0);
     });
 
     it('stop awaits an in-flight handler before resolving', async () => {
+        const timer = new ControllableTimer();
+        const scheduler = new TimerScheduler(timer);
         const gate = createGate();
         const events: string[] = [];
 
-        const scheduler = new FakeScheduler();
         scheduler.runEvery(100, async () => {
             await gate.opened;
             events.push('handler finished');
         });
 
-        void scheduler.advance(100);
-        const stopped = scheduler.stop().then(() => events.push('stop resolved'));
+        const ticking = timer.advance(100);
 
+        const stopped = scheduler.stop().then(() => events.push('stop resolved'));
         gate.open();
         await stopped;
+        await ticking;
 
         expect(events).toEqual(['handler finished', 'stop resolved']);
     });

@@ -13,7 +13,7 @@ Last updated: 2026-05-15 (async `Scheduler.stop()` + `FakeScheduler` tests)
 - `flush()` — no-op if closed or empty; otherwise splices the buffer, posts via `httpClient`, calls `onError` on persistent failure.
 - `close()` — `await scheduler.stop()` (resolves after any in-flight periodic handler settles), runs a final `flush()`, then marks status closed (status flip after the flush so its own guard doesn't skip the drain).
 - **No recorder-side in-flight tracking.** The scheduler tracks the periodic handler so `await scheduler.stop()` covers the periodic-flush case. The size-trigger (`void this.flush()` in `record`) and manual `flush()` calls can still race; acceptable for dogfooding.
-- Types: `ImpressionEvent` (discriminated by `eventType: 'isEnabled' | 'getVariant'`), `CustomEvent` (`eventType: 'custom'`), `ErrorInfo` (currently single variant), `FlightRecorderOptions` (nested `batch?: { flushAt?, flushAfterMs? }`, `retry?: { retries }`).
+- Types: `ImpressionEvent` (discriminated by `eventType: 'isEnabled' | 'getVariant'`, now includes required `timestamp: string` matching the Unleash JS SDK emit shape), `CustomEvent` (`eventType: 'custom'`), `ErrorInfo` (currently single variant), `FlightRecorderOptions` (nested `batch?: { flushAt?, flushAfterMs? }`, `retry?: { retries }`).
 
 `src/http-client.ts`
 - `createHttpClient({ url, headers, fetch, retries }): HttpClient`. Single method: `post(body: string): Promise<void>`. Wraps ky (retry/methods/headers/fetch). The only module that imports `ky`.
@@ -27,35 +27,36 @@ Last updated: 2026-05-15 (async `Scheduler.stop()` + `FakeScheduler` tests)
 `src/ndjson.ts`
 - `toNdjson(items: ReadonlyArray<unknown>): string` — generic NDJSON serializer. One JSON object per line, trailing `\n`. Returns `''` for empty input (the recorder's `flush` already guards against calling it that way, but the function handles it safely).
 
-## Tests (17 passing, ~32ms total)
+## Tests (18 passing, ~30ms total)
 
-`src/flight-recorder.test.ts` (10 tests, ~15ms — no ky backoff at this seam)
+`src/flight-recorder.test.ts` (11 tests, ~16ms — no ky backoff at this seam)
 1. `'records an impression'` — `record()` accepts an `ImpressionEvent`
 2. `'records a custom event'` — `record()` accepts a `CustomEvent`
 3. `'can flush with no events'` — empty-buffer guard
 4. `'ships recorded events to the configured url on flush'` — happy path: captures the outgoing `Request`'s url/method/content-type/authorization/body inside the fake and asserts the whole shape via one `toMatchObject`
-5. `'an event recorded mid-flush is sent on the next flush'` — atomicity: events recorded during an in-flight `fetch` are preserved for the next flush
-6. `'flushes automatically when the buffer reaches the configured size'` — size-based auto-flush via `batch.flushAt`. Counts `fetch` calls before/after threshold
-7. `'flushes automatically after the configured time elapses'` — time-based auto-flush via periodic `scheduler.runEvery(flushAfterMs, ...)`. Counts `fetch` calls before/after `scheduler.advance(flushAfterMs)`
-8. `'invokes onError when the transport fails'` — `fakeFetch` throws once, `retry: { retries: 0 }`, asserts `onError` called with `{ reason: 'persistentFailure', droppedEventCount: 1 }` and that an `error` is attached. Does not assert error type — that's ky's concern.
-9. `'flushes pending events and stops the periodic flush on close'` — records an event, calls `close()`. One assertion checks the event was flushed (`fetchCalls === 1`); another checks `scheduler.getStatus() === 'stopped'`.
-10. `'ignores record and flush calls after close'` — calls `close()` on an empty recorder, then `record(event)` (which would normally trigger a size-flush at `flushAt: 1`), then explicit `flush()`. After settling microtasks via `setImmediate`, asserts `fetchCalls === 0` — neither the size-trigger nor the manual flush hit the network.
+5. `'preserves the timestamp from a recorded impression on the wire'` — type alignment: asserts `timestamp` passes through verbatim. Pinned after aligning `ImpressionEvent` with the Unleash JS SDK's emit shape.
+6. `'an event recorded mid-flush is sent on the next flush'` — atomicity: events recorded during an in-flight `fetch` are preserved for the next flush
+7. `'flushes automatically when the buffer reaches the configured size'` — size-based auto-flush via `batch.flushAt`. Counts `fetch` calls before/after threshold
+8. `'flushes automatically after the configured time elapses'` — time-based auto-flush via periodic `scheduler.runEvery(flushAfterMs, ...)`. Counts `fetch` calls before/after `scheduler.advance(flushAfterMs)`
+9. `'invokes onError when the transport fails'` — `fakeFetch` throws once, `retry: { retries: 0 }`, asserts `onError` called with `{ reason: 'persistentFailure', droppedEventCount: 1 }` and that an `error` is attached. Does not assert error type — that's ky's concern.
+10. `'flushes pending events and stops the periodic flush on close'` — records an event, calls `close()`. One assertion checks the event was flushed (`fetchCalls === 1`); another checks `scheduler.getStatus() === 'stopped'`.
+11. `'ignores record and flush calls after close'` — calls `close()` on an empty recorder, then `record(event)` (which would normally trigger a size-flush at `flushAt: 1`), then explicit `flush()`. After settling microtasks via `setImmediate`, asserts `fetchCalls === 0` — neither the size-trigger nor the manual flush hit the network.
 
 `src/http-client.test.ts` (1 test, ~10ms — backoff bypassed via `retryDelay: () => 0`)
-9. `'retries POST requests when retries is configured'` — verifies our two retry choices flow through to ky: `limit: options.retries` and `methods: ['post']` (POST is excluded from ky's default retry list). Fake fetch throws once, then succeeds; asserts fetch called twice.
+12. `'retries POST requests when retries is configured'` — verifies our two retry choices flow through to ky: `limit: options.retries` and `methods: ['post']` (POST is excluded from ky's default retry list). Fake fetch throws once, then succeeds; asserts fetch called twice.
 
 `src/ndjson.test.ts` (1 test)
-11. `'emits one JSON object per line with a trailing newline'`
+13. `'emits one JSON object per line with a trailing newline'`
 
 `src/fake-scheduler.test.ts` (5 tests)
-12. `'runs the handler once per interval inside advance'` — `advance(350)` with interval 100 triggers 3 calls.
-13. `'throws when runEvery is called twice'` — one-interval-only invariant.
-14. `'reports active after runEvery and stopped after stop'` — `getStatus()` lifecycle.
-15. `'does not invoke the handler after stop'` — `stop()` before `advance()` keeps call count at 0.
-16. `'stop awaits an in-flight handler before resolving'` — handler awaits a manually-controlled gate; `stop()` does not resolve until the gate releases. Pins the async-stop contract.
+14. `'runs the handler once per interval inside advance'` — `advance(350)` with interval 100 triggers 3 calls.
+15. `'throws when runEvery is called twice'` — one-interval-only invariant.
+16. `'reports active after runEvery and stopped after stop'` — `getStatus()` lifecycle.
+17. `'does not invoke the handler after stop'` — `stop()` before `advance()` keeps call count at 0.
+18. `'stop awaits an in-flight handler before resolving'` — handler awaits a manually-controlled gate; `stop()` does not resolve until the gate releases. Pins the async-stop contract.
 
 Test conveniences in `flight-recorder.test.ts`:
-- Module-level `defaultUrl`, `defaultFetch`, `defaultClientKey`, and a `createRecorder(overrides?)` factory. Tests that don't exercise a particular constructor input rely on the factory; tests that do override (with values different from defaults) to make the data flow visible.
+- Module-level `defaultUrl`, `defaultFetch`, `defaultClientKey`, `defaultTimestamp`, and a `createRecorder(overrides?)` factory plus `defaultImpressionEvent`. Tests that don't exercise a particular input rely on these defaults; tests that do override with values visibly different from defaults.
 
 ## What's deliberately NOT yet built
 
@@ -63,15 +64,16 @@ Each line is a future TDD step:
 
 - **Transport failure handling.** If `fetch` rejects, the spliced events vanish. No test pins down the desired behavior.
 - **5xx response handling.** `fetch` doesn't reject on a non-2xx status; we'd need `response.ok` and re-queue. Not handled.
-- **Manual `flush()` and size-trigger `void this.flush()` can still race** with the periodic — matches the trade-off `unleash-client-node` makes. (`close()` *does* await the periodic handler now via async `scheduler.stop()` — pinned by tests 13 and 18.) If a real test demands stricter guarantees for the non-periodic paths, drive them in then.
-- **Wire envelope.** Shipped events currently lack `schemaVersion`, `timestamp`, `source`, `appName`, `environment` (per reference design). No test pins this down.
-- ~~**`close()` does not block further `record()` calls.**~~ Done — `record()` and `flush()` early-return after close (test 10).
-- **`keepalive: true`** option on `flush()` for browser unload.
+- **Manual `flush()` and size-trigger `void this.flush()` can still race** with the periodic — matches the trade-off `unleash-client-node` makes. (`close()` *does* await the periodic handler now via async `scheduler.stop()` — pinned by test 18.) If a real test demands stricter guarantees for the non-periodic paths, drive them in then.
+- **`CustomEvent` type realignment.** SDK emits `eventName: string` (not `name`) and includes `timestamp`. Our `CustomEvent` type has `name: string` — a rename is needed before SDK custom events can be wired without casting. Separate step.
+- ~~**`close()` does not block further `record()` calls.**~~ Done — `record()` and `flush()` early-return after close (test 11).
+- ~~**Wire envelope stamping.**~~ **Not needed** — the Unleash JS SDK already emits `timestamp`, `appName` (in `context`), and `environment` (in `context`). The recorder passes events through verbatim. `schemaVersion` and `source` explicitly dropped.
+- **`keepalive: true`** option on `flush()` / `close()` for browser unload.
+- **Buffer cap / `onError({ reason: 'queueFull' })`** — buffer is unbounded; memory leak risk under backend outage.
 - **Dedup of identical buffered events.**
-- **Custom event end-to-end test.** Type accepts `CustomEvent`, but no test asserts it actually reaches the wire.
-- ~~**Batching coverage test.**~~ Done (test 5).
 
 ## Next test candidates
 
-- **Transport failure handling** — `fetch` rejects → re-queue at front + rethrow. Requires impl change (`try/catch` + `buffer.unshift(...toSend)`).
-- **5xx response handling** — `fetch` resolves with non-2xx → re-queue. Adjacent to transport failure but different impl path (`response.ok` check).
+- **`CustomEvent` realignment** — rename `name` → `eventName`, add `timestamp: string`. Mirrors what we just did for `ImpressionEvent`. Small cascade fix.
+- **`keepalive` on `close()`** — admin UI page navigation is the dominant data-loss path; plumb `keepalive: true` through `flush` → `httpClient.post` → `fetch`.
+- **Buffer cap** — add `maxBufferSize` option; on overflow, drop oldest and fire `onError({ reason: 'queueFull', droppedEventCount })`.

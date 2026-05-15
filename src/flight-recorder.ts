@@ -5,6 +5,7 @@ import { toNdjson } from './ndjson.js';
 export type ImpressionEvent = {
     eventType: 'isEnabled' | 'getVariant';
     eventId: string;
+    timestamp: string;
     context: Record<string, unknown>;
     enabled: boolean;
     featureName: string;

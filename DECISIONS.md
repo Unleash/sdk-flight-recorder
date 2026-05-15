@@ -87,6 +87,10 @@ In a production scheduler this maps to self-chained `setTimeout`: `setTimeout(()
 
 *Why this works (and why we chose it):* this is the pattern Unleash's own Node SDK (`unleash-client-node`) uses for its metrics flushing — chained `setTimeout` with `await` between ticks, no explicit mutex. The pattern is production-proven there. It addresses the most common "in-flight at shutdown" case (a periodic that's mid-HTTP when something else triggers close) without adding in-flight promise tracking to the recorder. The size-trigger path (`void this.flush()` inside `record`) and any manual `flush()` calls can still race — same trade-off the Unleash SDK makes.
 
+## `Scheduler.stop()` is async and awaits the in-flight handler
+
+`stop(): Promise<void>` — not `void`. A `Scheduler` tracks the currently running handler invocation and `stop()` awaits it before resolving. *Why:* callers (notably `FlightRecorder.close()`) want a single await-point that means "no more handler invocations are running or will start." Without it, `close()` could cancel the next tick but the current tick's `flush()` would still be racing against `close()`'s own final flush. With async stop, `await this.scheduler.stop()` in `close()` resolves only when any periodic flush has fully settled — then `close()` runs its own final flush. No overlap. Pinned by `fake-scheduler.test.ts > 'stop awaits an in-flight handler before resolving'`.
+
 ## Shape: plain `flush()` + `close()`, no in-flight tracking
 
 ```ts
@@ -100,9 +104,9 @@ async flush() {
 
 async close() {
   if (this.status === 'closed') return;
-  this.scheduler.stop();
+  await this.scheduler.stop();   // resolves after any in-flight periodic handler settles
   await this.flush();
-  this.status = 'closed';   // set AFTER flush, so flush()'s own status guard doesn't early-return
+  this.status = 'closed';        // set AFTER flush, so flush()'s own status guard doesn't early-return
 }
 ```
 
@@ -110,9 +114,9 @@ State is just: `buffer`, `status: 'open' | 'closed'`. No `flushInFlight`, no wor
 
 *Why this shape:* an earlier worker-loop design with `kickWorker` / `workInProgress` was too clever for the small number of guarantees we actually wanted. The simple version is direct: `flush()` splices and posts; `close()` stops the scheduler, runs a final `flush()`, then marks closed. The ordering in `close()` is deliberate — `status = 'closed'` happens *after* the drain so `flush()`'s own status guard doesn't skip the final send.
 
-*What this gives up:* no guarantee that `close()` awaits HTTPs from earlier in-flight flushes (e.g., a periodic tick's send that's still pending when `close()` is called). Concurrent flushes can race. For the dogfooding scope this is acceptable; if it becomes a real problem we'll drive in a test and add the smallest mechanism needed at that point — not before.
+*What this gives up:* the size-trigger path (`void this.flush()` from `record`) and any manual `flush()` calls are not tracked, so they can still race with `close()`'s final flush. The *periodic* handler is awaited via `scheduler.stop()` — that was the most common in-flight-at-shutdown case. For dogfooding scope this is acceptable; if a real test ever needs stricter guarantees on the non-periodic paths, drive it in then.
 
-The scheduler stays narrow: `{ runEvery, stop, getStatus }`. `getStatus()` returns `'active' | 'stopped'` (union, not boolean).
+The scheduler stays narrow: `{ runEvery, stop, getStatus }`. `getStatus()` returns `'active' | 'stopped'` (union, not boolean). `stop()` returns `Promise<void>`.
 
 ## `RecorderStatus = 'open' | 'closed'`; everything is a no-op after close
 

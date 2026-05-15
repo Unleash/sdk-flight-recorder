@@ -2,7 +2,7 @@
 
 Snapshot of where the port stands. **This file goes stale fast** — update it each TDD step or treat it as a handoff snapshot only.
 
-Last updated: 2026-05-14
+Last updated: 2026-05-15 (async `Scheduler.stop()` + `FakeScheduler` tests)
 
 ## What's built
 
@@ -11,23 +11,23 @@ Last updated: 2026-05-14
 - Constructor builds an `HttpClient` once and schedules `scheduler.runEvery(flushAfterMs, () => this.flush())` when `flushAfterMs` is set. The scheduler is contractually required to await the handler before the next tick — so periodic flushes naturally serialize.
 - `record(event)` — pushes to buffer (no-op if closed); fires `void this.flush()` when `buffer.length >= batch.flushAt`.
 - `flush()` — no-op if closed or empty; otherwise splices the buffer, posts via `httpClient`, calls `onError` on persistent failure.
-- `close()` — stops the scheduler, runs a final `flush()`, then marks status closed (status flip after the flush so its own guard doesn't skip the drain).
-- **No in-flight tracking.** Concurrent flushes can race; `close()` does not await earlier in-flight HTTPs. Acceptable for dogfooding scope; revisit if a real test demands it.
+- `close()` — `await scheduler.stop()` (resolves after any in-flight periodic handler settles), runs a final `flush()`, then marks status closed (status flip after the flush so its own guard doesn't skip the drain).
+- **No recorder-side in-flight tracking.** The scheduler tracks the periodic handler so `await scheduler.stop()` covers the periodic-flush case. The size-trigger (`void this.flush()` in `record`) and manual `flush()` calls can still race; acceptable for dogfooding.
 - Types: `ImpressionEvent` (discriminated by `eventType: 'isEnabled' | 'getVariant'`), `CustomEvent` (`eventType: 'custom'`), `ErrorInfo` (currently single variant), `FlightRecorderOptions` (nested `batch?: { flushAt?, flushAfterMs? }`, `retry?: { retries }`).
 
 `src/http-client.ts`
 - `createHttpClient({ url, headers, fetch, retries }): HttpClient`. Single method: `post(body: string): Promise<void>`. Wraps ky (retry/methods/headers/fetch). The only module that imports `ky`.
 
 `src/scheduler.ts`
-- `Scheduler = { runEvery(ms, handler: () => Promise<void>): void; stop(): void; getStatus(): SchedulerStatus }` where `SchedulerStatus = 'active' | 'stopped'`. The handler is async; the scheduler must await it before scheduling the next tick (self-chained-setTimeout pattern, matching `unleash-client-node`). No production impl yet.
+- `Scheduler = { runEvery(ms, handler: () => Promise<void>): void; stop(): Promise<void>; getStatus(): SchedulerStatus }` where `SchedulerStatus = 'active' | 'stopped'`. The handler is async; the scheduler must await it before scheduling the next tick (self-chained-setTimeout pattern, matching `unleash-client-node`). `stop()` is async and resolves only after any in-flight handler invocation has settled.
 
 `src/fake-scheduler.ts`
-- `FakeScheduler implements Scheduler` for tests. One-interval-only: a second call to `runEvery` throws. `advance(ms): Promise<void>` is async — awaits the handler between iterations. Tests use `await scheduler.advance(...)`. Reports `'active'`/`'stopped'` via `getStatus()`. Non-cumulative across `advance` calls.
+- `FakeScheduler implements Scheduler` for tests. One-interval-only: a second call to `runEvery` throws. `advance(ms): Promise<void>` is async — awaits the handler between iterations and assigns each invocation to `inFlight` so a concurrent `stop()` can await it. Tests use `await scheduler.advance(...)`. Tracks a top-level `status` field; reports it via `getStatus()`. Non-cumulative across `advance` calls.
 
 `src/ndjson.ts`
 - `toNdjson(items: ReadonlyArray<unknown>): string` — generic NDJSON serializer. One JSON object per line, trailing `\n`. Returns `''` for empty input (the recorder's `flush` already guards against calling it that way, but the function handles it safely).
 
-## Tests (12 passing, ~26ms total)
+## Tests (17 passing, ~32ms total)
 
 `src/flight-recorder.test.ts` (10 tests, ~15ms — no ky backoff at this seam)
 1. `'records an impression'` — `record()` accepts an `ImpressionEvent`
@@ -45,7 +45,14 @@ Last updated: 2026-05-14
 9. `'retries POST requests when retries is configured'` — verifies our two retry choices flow through to ky: `limit: options.retries` and `methods: ['post']` (POST is excluded from ky's default retry list). Fake fetch throws once, then succeeds; asserts fetch called twice.
 
 `src/ndjson.test.ts` (1 test)
-10. `'emits one JSON object per line with a trailing newline'`
+11. `'emits one JSON object per line with a trailing newline'`
+
+`src/fake-scheduler.test.ts` (5 tests)
+12. `'runs the handler once per interval inside advance'` — `advance(350)` with interval 100 triggers 3 calls.
+13. `'throws when runEvery is called twice'` — one-interval-only invariant.
+14. `'reports active after runEvery and stopped after stop'` — `getStatus()` lifecycle.
+15. `'does not invoke the handler after stop'` — `stop()` before `advance()` keeps call count at 0.
+16. `'stop awaits an in-flight handler before resolving'` — handler awaits a manually-controlled gate; `stop()` does not resolve until the gate releases. Pins the async-stop contract.
 
 Test conveniences in `flight-recorder.test.ts`:
 - Module-level `defaultUrl`, `defaultFetch`, `defaultClientKey`, and a `createRecorder(overrides?)` factory. Tests that don't exercise a particular constructor input rely on the factory; tests that do override (with values different from defaults) to make the data flow visible.
@@ -56,7 +63,7 @@ Each line is a future TDD step:
 
 - **Transport failure handling.** If `fetch` rejects, the spliced events vanish. No test pins down the desired behavior.
 - **5xx response handling.** `fetch` doesn't reject on a non-2xx status; we'd need `response.ok` and re-queue. Not handled.
-- **Periodic flushes serialize** (scheduler awaits handler). Manual `flush()` and size-trigger `void this.flush()` can still race with the periodic — matches the trade-off `unleash-client-node` makes. `close()` does not await an earlier in-flight HTTP. If a real test demands stricter guarantees, drive them in then.
+- **Manual `flush()` and size-trigger `void this.flush()` can still race** with the periodic — matches the trade-off `unleash-client-node` makes. (`close()` *does* await the periodic handler now via async `scheduler.stop()` — pinned by tests 13 and 18.) If a real test demands stricter guarantees for the non-periodic paths, drive them in then.
 - **Wire envelope.** Shipped events currently lack `schemaVersion`, `timestamp`, `source`, `appName`, `environment` (per reference design). No test pins this down.
 - ~~**`close()` does not block further `record()` calls.**~~ Done — `record()` and `flush()` early-return after close (test 10).
 - **`keepalive: true`** option on `flush()` for browser unload.

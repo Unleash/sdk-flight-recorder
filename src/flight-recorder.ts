@@ -96,7 +96,7 @@ export class FlightRecorder {
 
     async close(): Promise<void> {
         if (this.status === 'closed') return;
-        this.scheduler.stop();
+        await this.scheduler.stop();
         await this.flush();
         this.status = 'closed';
     }

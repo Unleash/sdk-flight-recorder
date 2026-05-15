@@ -32,7 +32,7 @@ const defaultFetch: typeof fetch = async () => new Response();
 const defaultClientKey = 'default-client-key';
 const defaultScheduler: Scheduler = {
     runEvery: () => {},
-    stop: () => {},
+    stop: async () => {},
     getStatus: () => 'stopped',
 };
 

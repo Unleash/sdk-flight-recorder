@@ -148,6 +148,32 @@ The status is not exposed publicly. If a caller ever needs to ask "is this close
 
 The reference design's envelope (`schemaVersion`, `source`, `appName`, `environment` stamped at serialize time) was designed under the assumption that the recorder enriches bare events. For our dogfooding flow — Unleash admin UI FE and Unleash Cloud BE, both wired to the Unleash JS SDK — those fields are already in the event or in `event.context`. Stamping them would duplicate data. `schemaVersion` and `source` were explicitly dropped; `appName` and `environment` live in `event.context`; `timestamp` is now typed at the top level to match what the SDK emits.
 
+## `keepalive: true` on `close()` flush; `flush(options?)` accepts it on demand
+
+`close()` calls `this.flush({ keepalive: true })` so the browser holds the outgoing request open during page navigation. `flush` accepts an optional `{ keepalive?: boolean }` that threads through to `httpClient.post` and then to ky's request init. The default (no option or `keepalive: undefined`) lets ky send a normal request — no change for periodic or size-triggered flushes.
+
+*Why:* the dominant data-loss path for the Unleash admin UI FE is `beforeunload`/`pagehide` — the browser cancels in-flight `fetch` requests that weren't started with `keepalive: true`. Wiring `keepalive` at `close()` rather than everywhere keeps normal flushes unaffected. `HttpClient.post` accepts `options?: { keepalive?: boolean }` inline (no separate named type) to keep the surface minimal; the factory parameters were destructured in `createHttpClient` to avoid the inner `options` parameter shadowing the outer factory `options`.
+
+## In-batch dedup via `JSON.stringify`; seen set resets on flush
+
+`record()` stringifies each incoming event and checks a `Set<string>`. Duplicates within the current flush window are silently dropped — "first seen wins." The set is cleared atomically alongside `buffer.splice(0)` at the start of `flush()`, so the same event can be recorded again after a flush.
+
+*Why `JSON.stringify`:* simple to reason about, no compound key construction, no allow-list. Key-order sensitivity is accepted — the Unleash JS SDK emits events with stable key ordering per call site, so two events from the same call site with the same inputs always stringify identically. When this assumption breaks, a test will say so.
+
+*Why clear on splice, not on send success:* the splice and the clear are both the "drain" step — if we waited for the send to succeed before clearing, a failed flush would leave the seen set stale (events would never be re-recordable). Clearing on splice keeps the seen set aligned with the buffer state at all times.
+
+*Why dedup before the buffer cap check:* a duplicate that would exceed the cap shouldn't fire `onError({ reason: 'queueFull' })` — it's not a capacity problem, it's a repeat. Checking `seen` first keeps cap errors meaningful.
+
+## Buffer cap drops new events; `queueFull` joins the `ErrorInfo` union
+
+`batch.maxBufferSize` is an opt-in ceiling on `record()`. When the buffer is already at capacity, the incoming event is dropped (not the oldest) and `onError({ reason: 'queueFull', droppedEventCount: 1 })` is fired. `ErrorInfo` is now a discriminated union: `'persistentFailure'` carries `error: unknown`; `'queueFull'` does not.
+
+*Why drop new instead of oldest:* oldest events are closest to being shipped on the next flush; dropping them would throw away work that's already been buffered. Dropping new events also keeps the implementation O(1) — no splice needed.
+
+*Why `droppedEventCount: 1` per call:* each `record()` call is one event; batching the count across multiple drops would require extra state and makes the callback harder to reason about. Callers who want a running total can accumulate in their `onError` handler.
+
+*Browser keepalive constraint:* at ~300–400 bytes per event, 64 KB fits roughly 150–200 events. `maxBufferSize` should be set well below that for browser callers using `close()` on unload.
+
 ## `retryDelay` option on `HttpClient` — test escape hatch, ky default in production
 
 `HttpClientOptions.retryDelay?: (attemptCount: number) => number` is an optional pass-through to ky's `retry.delay`. When unset (production default), ky's exponential backoff applies. Tests pass `retryDelay: () => 0` so the retry-coverage test runs in ~10ms instead of ~310ms. *Why:* the HttpClient retry test covers a real choice we make (opting POST into ky's retry list via `methods: ['post']`), and renaming it from `'retries the failed fetch after one attempt and then succeeds'` to `'retries POST requests when retries is configured'` makes that value visible. But paying ~300ms per CI run for that single assertion is wasteful — the delay is incidental to what the test asserts. Exposing `retryDelay` lets the test override it without changing production behavior. The option is not surfaced on `FlightRecorderOptions` yet; if a production caller ever needs a custom curve, add it then with the test that demands it (per [[feedback-design-taste]]).

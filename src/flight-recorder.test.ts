@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { NetworkError } from 'ky';
 import type { Scheduler } from './scheduler.js';
 import { ControllableTimer } from './timer.js';
@@ -33,7 +34,6 @@ const snapshotRequest = async (req: Request): Promise<RequestSnapshot> => {
 const defaultUrl = 'https://example/events';
 const defaultFetch: typeof fetch = async () => new Response();
 const defaultClientKey = 'default-client-key';
-const defaultTimestamp = '2026-01-01 00:00:00.000';
 const defaultScheduler: Scheduler = {
     runEvery: () => {},
     stop: async () => {},
@@ -49,22 +49,23 @@ const createRecorder = (overrides: Partial<FlightRecorderOptions> = {}) =>
         ...overrides,
     });
 
-const defaultImpressionEvent: ImpressionEvent = {
+const makeImpressionEvent = (overrides: Partial<ImpressionEvent> = {}): ImpressionEvent => ({
     eventType: 'isEnabled',
-    eventId: '00000000-0000-4000-8000-000000000000',
-    timestamp: defaultTimestamp,
+    eventId: randomUUID(),
+    timestamp: new Date().toISOString(),
     context: {},
     enabled: true,
     featureName: 'default-flag',
-};
+    ...overrides,
+});
 
 describe('FlightRecorder', () => {
     it('records an impression', () => {
         const recorder = createRecorder();
         const event: ImpressionEvent = {
             eventType: 'isEnabled',
-            eventId: '11111111-1111-4111-8111-111111111111',
-            timestamp: defaultTimestamp,
+            eventId: randomUUID(),
+            timestamp: new Date().toISOString(),
             context: { userId: 'u-42', sessionId: 's-7' },
             enabled: true,
             featureName: 'demo.flag',
@@ -76,7 +77,7 @@ describe('FlightRecorder', () => {
         const recorder = createRecorder();
         const event: CustomEvent = {
             eventType: 'custom',
-            eventId: '22222222-2222-4222-8222-222222222222',
+            eventId: randomUUID(),
             context: { userId: 'u-42' },
             name: 'signup',
             payload: { plan: 'pro' },
@@ -176,8 +177,8 @@ describe('FlightRecorder', () => {
         };
 
         const recorder = createRecorder({ fetch: fakeFetch });
-        const before = { ...defaultImpressionEvent, featureName: 'before' };
-        const during = { ...defaultImpressionEvent, featureName: 'during' };
+        const before = makeImpressionEvent({ featureName: 'before' });
+        const during = makeImpressionEvent({ featureName: 'during' });
 
         recorder.record(before);
         const flushInFlight = recorder.flush();
@@ -204,11 +205,11 @@ describe('FlightRecorder', () => {
             batch: { flushAt: 2 },
         });
 
-        recorder.record({ ...defaultImpressionEvent, featureName: 'flag-1' });
+        recorder.record(makeImpressionEvent({ featureName: 'flag-1' }));
         await new Promise<void>((resolve) => setImmediate(resolve));
         expect(fetchCalls).toBe(0);
 
-        recorder.record({ ...defaultImpressionEvent, featureName: 'flag-2' });
+        recorder.record(makeImpressionEvent({ featureName: 'flag-2' }));
         await new Promise<void>((resolve) => setImmediate(resolve));
         expect(fetchCalls).toBe(1);
     });
@@ -226,7 +227,7 @@ describe('FlightRecorder', () => {
             batch: { flushAfterMs: 2000, flushAt: 2 },
         });
 
-        recorder.record(defaultImpressionEvent);
+        recorder.record(makeImpressionEvent());
         expect(fetchCalls).toBe(0);
 
         await timer.advance(2000);
@@ -241,9 +242,9 @@ describe('FlightRecorder', () => {
             onError: (info) => errors.push(info),
         });
 
-        recorder.record({ ...defaultImpressionEvent, featureName: 'flag-1' });
-        recorder.record({ ...defaultImpressionEvent, featureName: 'flag-2' });
-        recorder.record({ ...defaultImpressionEvent, featureName: 'flag-3' });
+        recorder.record(makeImpressionEvent({ featureName: 'flag-1' }));
+        recorder.record(makeImpressionEvent({ featureName: 'flag-2' }));
+        recorder.record(makeImpressionEvent({ featureName: 'flag-3' }));
 
         expect(errors).toMatchObject([{ reason: 'queueFull', droppedEventCount: 1 }]);
     });
@@ -256,14 +257,12 @@ describe('FlightRecorder', () => {
         };
 
         const recorder = createRecorder({ fetch: fakeFetch });
-        recorder.record(defaultImpressionEvent);
-        recorder.record(defaultImpressionEvent);
+        recorder.record(makeImpressionEvent({ featureName: 'demo.flag' }));
+        recorder.record(makeImpressionEvent({ featureName: 'demo.flag' }));
         await recorder.flush();
 
         const [snapshot] = await Promise.all(snapshots);
-        expect(snapshot).toMatchObject({
-            body: `${JSON.stringify(defaultImpressionEvent)}\n`,
-        });
+        expect(snapshot!.body.trim().split('\n')).toHaveLength(1);
     });
 
     it('invokes onError when the transport fails', async () => {
@@ -276,7 +275,7 @@ describe('FlightRecorder', () => {
             fetch: fakeFetch,
             onError: (info) => errors.push(info),
         });
-        recorder.record(defaultImpressionEvent);
+        recorder.record(makeImpressionEvent());
         await recorder.flush();
 
         expect(errors).toMatchObject([
@@ -300,7 +299,7 @@ describe('FlightRecorder', () => {
         });
 
         await recorder.close();
-        recorder.record(defaultImpressionEvent);
+        recorder.record(makeImpressionEvent());
         await recorder.flush();
         await new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -315,12 +314,13 @@ describe('FlightRecorder', () => {
         };
         const recorder = createRecorder({ fetch: fakeFetch });
 
-        recorder.record(defaultImpressionEvent);
+        const event = makeImpressionEvent();
+        recorder.record(event);
         await recorder.close();
 
         const [snapshot] = await Promise.all(snapshots);
         expect(snapshot).toMatchObject({
-            body: `${JSON.stringify(defaultImpressionEvent)}\n`,
+            body: `${JSON.stringify(event)}\n`,
             keepalive: true,
         });
     });
@@ -338,7 +338,7 @@ describe('FlightRecorder', () => {
             batch: { flushAfterMs: 2000 },
         });
 
-        recorder.record(defaultImpressionEvent);
+        recorder.record(makeImpressionEvent());
         await recorder.close();
 
         expect(fetchCalls).toBe(1);

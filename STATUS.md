@@ -27,7 +27,7 @@ Last updated: 2026-05-15 (`EventBuffer` extracted; buffer/seen/dedup/cap logic i
 `src/timer.ts`
 - `Timer` — the injected seam: `schedule(ms, callback) => cancel`, a one-shot delayed callback. Two impls: `systemTimer` (production, `setTimeout`/`clearTimeout`) and `ControllableTimer` (tests, in-memory with one `pending` slot; `advance(ms)` fires due callbacks, awaiting each).
 
-`src/fake-scheduler.ts` (filename kept for git-history continuity; exports `TimerScheduler`)
+`src/timer-scheduler.ts`
 - `TimerScheduler implements Scheduler` — the *only* scheduler. Takes a required `Timer` in the constructor. Self-chains via `timer.schedule` (`scheduleNext`); the timer callback returns the in-flight handler promise so `ControllableTimer` can await it. Tracks `inFlight` so `stop()` awaits a running handler, and cancels the pending tick. One-interval-only (second `runEvery` throws). Tests that drive time use `new TimerScheduler(new ControllableTimer())` and advance the timer directly — there is no `FakeScheduler`.
 
 `src/ndjson.ts`
@@ -54,7 +54,7 @@ Last updated: 2026-05-15 (`EventBuffer` extracted; buffer/seen/dedup/cap logic i
 `src/ndjson.test.ts` (1 test)
 13. `'emits one JSON object per line with a trailing newline'`
 
-`src/fake-scheduler.test.ts` (5 tests — plain flat `describe`, no fake timers; each test builds `new TimerScheduler(new ControllableTimer())` and drives `timer.advance(ms)`)
+`src/timer-scheduler.test.ts` (5 tests — plain flat `describe`, no fake timers; each test builds `new TimerScheduler(new ControllableTimer())` and drives `timer.advance(ms)`)
 14. `'runs the handler on every interval tick'` — `advance(300)` with interval 100 triggers 3 calls.
 15. `'throws when runEvery is called twice'` — one-interval-only invariant.
 16. `'reports active after runEvery and stopped after stop'` — `getStatus()` lifecycle.

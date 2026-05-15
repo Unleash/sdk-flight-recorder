@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { NetworkError } from 'ky';
 import type { Scheduler } from './scheduler.js';
 import { ControllableTimer } from './timer.js';
-import { TimerScheduler } from './fake-scheduler.js';
+import { TimerScheduler } from './timer-scheduler.js';
 import {
     FlightRecorder,
     type ErrorInfo,

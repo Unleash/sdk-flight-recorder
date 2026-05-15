@@ -89,7 +89,7 @@ In a production scheduler this maps to self-chained `setTimeout`: `setTimeout(()
 
 ## `Scheduler.stop()` is async and awaits the in-flight handler
 
-`stop(): Promise<void>` — not `void`. A `Scheduler` tracks the currently running handler invocation and `stop()` awaits it before resolving. *Why:* callers (notably `FlightRecorder.close()`) want a single await-point that means "no more handler invocations are running or will start." Without it, `close()` could cancel the next tick but the current tick's `flush()` would still be racing against `close()`'s own final flush. With async stop, `await this.scheduler.stop()` in `close()` resolves only when any periodic flush has fully settled — then `close()` runs its own final flush. No overlap. Pinned by `fake-scheduler.test.ts > 'stop awaits an in-flight handler before resolving'`.
+`stop(): Promise<void>` — not `void`. A `Scheduler` tracks the currently running handler invocation and `stop()` awaits it before resolving. *Why:* callers (notably `FlightRecorder.close()`) want a single await-point that means "no more handler invocations are running or will start." Without it, `close()` could cancel the next tick but the current tick's `flush()` would still be racing against `close()`'s own final flush. With async stop, `await this.scheduler.stop()` in `close()` resolves only when any periodic flush has fully settled — then `close()` runs its own final flush. No overlap. Pinned by `timer-scheduler.test.ts > 'stop awaits an in-flight handler before resolving'`.
 
 ## One scheduler; the `Timer` is the injected seam
 
@@ -101,7 +101,7 @@ The one subtlety: `TimerScheduler`'s timer callback **returns** its in-flight ha
 
 ## `TimerScheduler` is tested with `ControllableTimer` — no fake timers
 
-`fake-scheduler.test.ts` (named for git-history continuity with the file it replaced) is a plain, flat `describe` of five `it`s — no `describe.each`, no harness, no `vi.useFakeTimers()`. Each test builds `new TimerScheduler(new ControllableTimer())` and drives time with `timer.advance(ms)`. Behaviours pinned: runs-per-tick, `runEvery`-twice throws, status lifecycle, no-run-after-stop, stop-awaits-in-flight.
+`timer-scheduler.test.ts` is a plain, flat `describe` of five `it`s — no `describe.each`, no harness, no `vi.useFakeTimers()`. Each test builds `new TimerScheduler(new ControllableTimer())` and drives time with `timer.advance(ms)`. Behaviours pinned: runs-per-tick, `runEvery`-twice throws, status lifecycle, no-run-after-stop, stop-awaits-in-flight.
 
 *Why no `vi.useFakeTimers()`:* `ControllableTimer` already *is* a deterministic, in-memory clock — mocking the global timer on top of it would be redundant and makes tests harder to read. `vi.useFakeTimers()` only earns its keep when testing `systemTimer` (real `setTimeout`) directly; we don't — `systemTimer` is six lines of glue over `setTimeout`/`clearTimeout`, exercised in real use, not worth a fake-timer unit test. The whole `Scheduler` algorithm is covered through `ControllableTimer`, which faithfully drives it.
 

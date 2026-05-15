@@ -3,6 +3,9 @@ import { EventBuffer } from './event-buffer.js';
 import type { Scheduler } from './scheduler.js';
 import { toNdjson } from './ndjson.js';
 
+const semanticEventKey = (event: ImpressionEvent | CustomEvent): string =>
+    JSON.stringify(event, (k, v) => (k === 'eventId' || k === 'timestamp' ? undefined : v));
+
 export type ImpressionEvent = {
     eventType: 'isEnabled' | 'getVariant';
     eventId: string;
@@ -76,7 +79,7 @@ export class FlightRecorder {
                 'batch.flushAt is required when batch.maxBufferSize is set',
             );
         }
-        this.buffer = new EventBuffer({ maxSize: maxBufferSize });
+        this.buffer = new EventBuffer({ maxSize: maxBufferSize, dedupKey: semanticEventKey });
         this.onError = options.onError;
         const flushAfterMs = options.batch?.flushAfterMs;
         if (flushAfterMs !== undefined) {

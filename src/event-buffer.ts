@@ -4,9 +4,11 @@ export class EventBuffer<T> {
     private readonly events: T[] = [];
     private readonly seen = new Set<string>();
     private readonly maxSize: number | undefined;
+    private readonly dedupKey: (event: T) => string;
 
-    constructor(options: { maxSize?: number } = {}) {
+    constructor(options: { maxSize?: number; dedupKey: (event: T) => string }) {
         this.maxSize = options.maxSize;
+        this.dedupKey = options.dedupKey;
     }
 
     get size(): number {
@@ -14,7 +16,7 @@ export class EventBuffer<T> {
     }
 
     add(event: T): AddResult {
-        const key = JSON.stringify(event);
+        const key = this.dedupKey(event);
         if (this.seen.has(key)) return 'duplicate';
         if (this.maxSize !== undefined && this.events.length >= this.maxSize) {
             return 'overflow';

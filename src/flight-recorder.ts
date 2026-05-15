@@ -21,11 +21,9 @@ export type CustomEvent = {
     payload?: unknown;
 };
 
-export type ErrorInfo = {
-    reason: 'persistentFailure';
-    droppedEventCount: number;
-    error: unknown;
-};
+export type ErrorInfo =
+    | { reason: 'persistentFailure'; droppedEventCount: number; error: unknown }
+    | { reason: 'queueFull'; droppedEventCount: number };
 
 type RecorderStatus = 'open' | 'closed';
 
@@ -37,6 +35,7 @@ export type FlightRecorderOptions = {
     batch?: {
         flushAt?: number;
         flushAfterMs?: number;
+        maxBufferSize?: number;
     };
     retry?: {
         retries: number;
@@ -48,6 +47,7 @@ export class FlightRecorder {
     private readonly httpClient: HttpClient;
     private readonly scheduler: Scheduler;
     private readonly flushAt: number | undefined;
+    private readonly maxBufferSize: number | undefined;
     private readonly onError: ((info: ErrorInfo) => void) | undefined;
     private readonly buffer: Array<ImpressionEvent | CustomEvent> = [];
     private status: RecorderStatus = 'open';
@@ -64,6 +64,7 @@ export class FlightRecorder {
         });
         this.scheduler = options.scheduler;
         this.flushAt = options.batch?.flushAt;
+        this.maxBufferSize = options.batch?.maxBufferSize;
         this.onError = options.onError;
         const flushAfterMs = options.batch?.flushAfterMs;
         if (flushAfterMs !== undefined) {
@@ -73,6 +74,10 @@ export class FlightRecorder {
 
     record(event: ImpressionEvent | CustomEvent): void {
         if (this.status === 'closed') return;
+        if (this.maxBufferSize !== undefined && this.buffer.length >= this.maxBufferSize) {
+            this.onError?.({ reason: 'queueFull', droppedEventCount: 1 });
+            return;
+        }
         this.buffer.push(event);
         if (this.flushAt !== undefined && this.buffer.length >= this.flushAt) {
             void this.flush();

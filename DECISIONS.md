@@ -138,6 +138,16 @@ The reference design's envelope (`schemaVersion`, `source`, `appName`, `environm
 
 *Why:* the dominant data-loss path for the Unleash admin UI FE is `beforeunload`/`pagehide` — the browser cancels in-flight `fetch` requests that weren't started with `keepalive: true`. Wiring `keepalive` at `close()` rather than everywhere keeps normal flushes unaffected. `HttpClient.post` accepts `options?: { keepalive?: boolean }` inline (no separate named type) to keep the surface minimal; the factory parameters were destructured in `createHttpClient` to avoid the inner `options` parameter shadowing the outer factory `options`.
 
+## Buffer cap drops new events; `queueFull` joins the `ErrorInfo` union
+
+`batch.maxBufferSize` is an opt-in ceiling on `record()`. When the buffer is already at capacity, the incoming event is dropped (not the oldest) and `onError({ reason: 'queueFull', droppedEventCount: 1 })` is fired. `ErrorInfo` is now a discriminated union: `'persistentFailure'` carries `error: unknown`; `'queueFull'` does not.
+
+*Why drop new instead of oldest:* oldest events are closest to being shipped on the next flush; dropping them would throw away work that's already been buffered. Dropping new events also keeps the implementation O(1) — no splice needed.
+
+*Why `droppedEventCount: 1` per call:* each `record()` call is one event; batching the count across multiple drops would require extra state and makes the callback harder to reason about. Callers who want a running total can accumulate in their `onError` handler.
+
+*Browser keepalive constraint:* at ~300–400 bytes per event, 64 KB fits roughly 150–200 events. `maxBufferSize` should be set well below that for browser callers using `close()` on unload.
+
 ## `retryDelay` option on `HttpClient` — test escape hatch, ky default in production
 
 `HttpClientOptions.retryDelay?: (attemptCount: number) => number` is an optional pass-through to ky's `retry.delay`. When unset (production default), ky's exponential backoff applies. Tests pass `retryDelay: () => 0` so the retry-coverage test runs in ~10ms instead of ~310ms. *Why:* the HttpClient retry test covers a real choice we make (opting POST into ky's retry list via `methods: ['post']`), and renaming it from `'retries the failed fetch after one attempt and then succeeds'` to `'retries POST requests when retries is configured'` makes that value visible. But paying ~300ms per CI run for that single assertion is wasteful — the delay is incidental to what the test asserts. Exposing `retryDelay` lets the test override it without changing production behavior. The option is not surfaced on `FlightRecorderOptions` yet; if a production caller ever needs a custom curve, add it then with the test that demands it (per [[feedback-design-taste]]).

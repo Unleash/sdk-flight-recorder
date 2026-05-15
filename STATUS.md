@@ -69,13 +69,12 @@ Each line is a future TDD step:
 - ~~**`close()` does not block further `record()` calls.**~~ Done — `record()` and `flush()` early-return after close (test 11).
 - ~~**Wire envelope stamping.**~~ **Not needed** — the Unleash JS SDK already emits `timestamp`, `appName` (in `context`), and `environment` (in `context`). The recorder passes events through verbatim. `schemaVersion` and `source` explicitly dropped.
 - ~~**`keepalive: true`** option on `flush()` / `close()` for browser unload.~~ Done — `close()` flushes with `keepalive: true`; `flush(options?)` accepts it on demand.
-- **Buffer cap / `onError({ reason: 'queueFull' })`** — buffer is unbounded; memory leak risk under backend outage.
+- ~~**Buffer cap / `onError({ reason: 'queueFull' })`**~~ Done — `batch.maxBufferSize` drops new events and fires `onError({ reason: 'queueFull', droppedEventCount: 1 })`.
 - **Dedup of identical buffered events.**
 
 ## Next test candidates
 
 - **`CustomEvent` realignment** — rename `name` → `eventName`, add `timestamp: string`. Mirrors what we just did for `ImpressionEvent`. Small cascade fix.
-- **Buffer cap** — add `maxBufferSize` option; on overflow, drop new events and fire `onError({ reason: 'queueFull', droppedEventCount })`.
 - **Dedup** — in-batch dedup via `JSON.stringify(event)` key; "first seen wins" within one flush window, reset on flush.
 - **Production Scheduler** — chained `setTimeout` impl of the `Scheduler` interface.
 - **Public entry point + CI** — `src/index.ts` re-exports, `.github/workflows/ci.yml`.

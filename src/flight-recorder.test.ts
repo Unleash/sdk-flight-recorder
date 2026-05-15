@@ -265,6 +265,35 @@ describe('FlightRecorder', () => {
         expect(fetchCalls).toBe(0);
     });
 
+    it('drops new events and fires onError with queueFull when the buffer is full', async () => {
+        const errors: ErrorInfo[] = [];
+        const snapshots: Array<Promise<RequestSnapshot>> = [];
+        const fakeFetch: typeof fetch = async (input) => {
+            snapshots.push(snapshotRequest(input as Request));
+            return new Response();
+        };
+
+        const event1 = { ...defaultImpressionEvent, featureName: 'flag-1' };
+        const event2 = { ...defaultImpressionEvent, featureName: 'flag-2' };
+        const event3 = { ...defaultImpressionEvent, featureName: 'flag-3' };
+
+        const recorder = createRecorder({
+            fetch: fakeFetch,
+            batch: { maxBufferSize: 2 },
+            onError: (info) => errors.push(info),
+        });
+
+        recorder.record(event1);
+        recorder.record(event2);
+        recorder.record(event3);
+
+        await recorder.flush();
+
+        expect(errors).toMatchObject([{ reason: 'queueFull', droppedEventCount: 1 }]);
+        const [snapshot] = await Promise.all(snapshots);
+        expect(snapshot!.body).toBe(`${JSON.stringify(event1)}\n${JSON.stringify(event2)}\n`);
+    });
+
     it('sends remaining events with keepalive on close', async () => {
         const snapshots: Array<Promise<RequestSnapshot>> = [];
         const fakeFetch: typeof fetch = async (input) => {

@@ -79,13 +79,13 @@ export class FlightRecorder {
         }
     }
 
-    async flush(): Promise<void> {
+    async flush(options?: { keepalive?: boolean }): Promise<void> {
         if (this.status === 'closed') return;
         if (this.buffer.length === 0) return;
         const toSend = this.buffer.splice(0);
         const body = toNdjson(toSend);
         try {
-            await this.httpClient.post(body);
+            await this.httpClient.post(body, { keepalive: options?.keepalive });
         } catch (err) {
             this.onError?.({
                 reason: 'persistentFailure',
@@ -98,7 +98,7 @@ export class FlightRecorder {
     async close(): Promise<void> {
         if (this.status === 'closed') return;
         await this.scheduler.stop();
-        await this.flush();
+        await this.flush({ keepalive: true });
         this.status = 'closed';
     }
 }

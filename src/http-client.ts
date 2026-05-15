@@ -1,7 +1,7 @@
 import ky from 'ky';
 
 export type HttpClient = {
-    post(body: string): Promise<void>;
+    post(body: string, postOptions?: { keepalive?: boolean }): Promise<void>;
 };
 
 export type HttpClientOptions = {
@@ -23,8 +23,11 @@ export const createHttpClient = (options: HttpClientOptions): HttpClient => {
         headers: options.headers,
     });
     return {
-        post: async (body) => {
-            await client.post(options.url, { body });
+        post: async (body, postOptions) => {
+            await client.post(options.url, {
+                body,
+                keepalive: postOptions?.keepalive,
+            });
         },
     };
 };

@@ -68,12 +68,14 @@ Each line is a future TDD step:
 - **`CustomEvent` type realignment.** SDK emits `eventName: string` (not `name`) and includes `timestamp`. Our `CustomEvent` type has `name: string` — a rename is needed before SDK custom events can be wired without casting. Separate step.
 - ~~**`close()` does not block further `record()` calls.**~~ Done — `record()` and `flush()` early-return after close (test 11).
 - ~~**Wire envelope stamping.**~~ **Not needed** — the Unleash JS SDK already emits `timestamp`, `appName` (in `context`), and `environment` (in `context`). The recorder passes events through verbatim. `schemaVersion` and `source` explicitly dropped.
-- **`keepalive: true`** option on `flush()` / `close()` for browser unload.
+- ~~**`keepalive: true`** option on `flush()` / `close()` for browser unload.~~ Done — `close()` flushes with `keepalive: true`; `flush(options?)` accepts it on demand.
 - **Buffer cap / `onError({ reason: 'queueFull' })`** — buffer is unbounded; memory leak risk under backend outage.
 - **Dedup of identical buffered events.**
 
 ## Next test candidates
 
 - **`CustomEvent` realignment** — rename `name` → `eventName`, add `timestamp: string`. Mirrors what we just did for `ImpressionEvent`. Small cascade fix.
-- **`keepalive` on `close()`** — admin UI page navigation is the dominant data-loss path; plumb `keepalive: true` through `flush` → `httpClient.post` → `fetch`.
-- **Buffer cap** — add `maxBufferSize` option; on overflow, drop oldest and fire `onError({ reason: 'queueFull', droppedEventCount })`.
+- **Buffer cap** — add `maxBufferSize` option; on overflow, drop new events and fire `onError({ reason: 'queueFull', droppedEventCount })`.
+- **Dedup** — in-batch dedup via `JSON.stringify(event)` key; "first seen wins" within one flush window, reset on flush.
+- **Production Scheduler** — chained `setTimeout` impl of the `Scheduler` interface.
+- **Public entry point + CI** — `src/index.ts` re-exports, `.github/workflows/ci.yml`.

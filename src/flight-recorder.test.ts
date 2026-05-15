@@ -15,6 +15,7 @@ type RequestSnapshot = {
     method: string;
     headers: Record<string, string>;
     body: string;
+    keepalive: boolean;
 };
 
 const snapshotRequest = async (req: Request): Promise<RequestSnapshot> => {
@@ -24,6 +25,7 @@ const snapshotRequest = async (req: Request): Promise<RequestSnapshot> => {
         method: cloned.method,
         headers: Object.fromEntries(cloned.headers),
         body: await cloned.text(),
+        keepalive: req.keepalive,
     };
 };
 
@@ -261,6 +263,24 @@ describe('FlightRecorder', () => {
         await new Promise<void>((resolve) => setImmediate(resolve));
 
         expect(fetchCalls).toBe(0);
+    });
+
+    it('sends remaining events with keepalive on close', async () => {
+        const snapshots: Array<Promise<RequestSnapshot>> = [];
+        const fakeFetch: typeof fetch = async (input) => {
+            snapshots.push(snapshotRequest(input as Request));
+            return new Response();
+        };
+        const recorder = createRecorder({ fetch: fakeFetch });
+
+        recorder.record(defaultImpressionEvent);
+        await recorder.close();
+
+        const [snapshot] = await Promise.all(snapshots);
+        expect(snapshot).toMatchObject({
+            body: `${JSON.stringify(defaultImpressionEvent)}\n`,
+            keepalive: true,
+        });
     });
 
     it('flushes pending events and stops the periodic flush on close', async () => {

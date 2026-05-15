@@ -1,4 +1,5 @@
 import { createHttpClient, type HttpClient } from './http-client.js';
+import { EventBuffer } from './event-buffer.js';
 import type { Scheduler } from './scheduler.js';
 import { toNdjson } from './ndjson.js';
 
@@ -53,10 +54,8 @@ export class FlightRecorder {
     private readonly httpClient: HttpClient;
     private readonly scheduler: Scheduler;
     private readonly flushAt: number | undefined;
-    private readonly maxBufferSize: number | undefined;
     private readonly onError: ((info: ErrorInfo) => void) | undefined;
-    private readonly buffer: Array<ImpressionEvent | CustomEvent> = [];
-    private readonly seen = new Set<string>();
+    private readonly buffer: EventBuffer<ImpressionEvent | CustomEvent>;
     private status: RecorderStatus = 'open';
 
     constructor(options: FlightRecorderOptions) {
@@ -71,12 +70,13 @@ export class FlightRecorder {
         });
         this.scheduler = options.scheduler;
         this.flushAt = options.batch?.flushAt;
-        this.maxBufferSize = options.batch?.maxBufferSize;
-        if (this.maxBufferSize !== undefined && this.flushAt === undefined) {
+        const maxBufferSize = options.batch?.maxBufferSize;
+        if (maxBufferSize !== undefined && this.flushAt === undefined) {
             throw new Error(
                 'batch.flushAt is required when batch.maxBufferSize is set',
             );
         }
+        this.buffer = new EventBuffer({ maxSize: maxBufferSize });
         this.onError = options.onError;
         const flushAfterMs = options.batch?.flushAfterMs;
         if (flushAfterMs !== undefined) {
@@ -86,27 +86,21 @@ export class FlightRecorder {
 
     record(event: ImpressionEvent | CustomEvent): void {
         if (this.status === 'closed') return;
-        const key = JSON.stringify(event);
-        if (this.seen.has(key)) return;
-        if (
-            this.maxBufferSize !== undefined &&
-            this.buffer.length >= this.maxBufferSize
-        ) {
+        const result = this.buffer.add(event);
+        if (result === 'duplicate') return;
+        if (result === 'overflow') {
             this.onError?.({ reason: 'queueFull', droppedEventCount: 1 });
             return;
         }
-        this.seen.add(key);
-        this.buffer.push(event);
-        if (this.flushAt !== undefined && this.buffer.length >= this.flushAt) {
+        if (this.flushAt !== undefined && this.buffer.size >= this.flushAt) {
             void this.flush();
         }
     }
 
     async flush(options?: { keepalive?: boolean }): Promise<void> {
         if (this.status === 'closed') return;
-        if (this.buffer.length === 0) return;
-        const toSend = this.buffer.splice(0);
-        this.seen.clear();
+        if (this.buffer.size === 0) return;
+        const toSend = this.buffer.drain();
         const body = toNdjson(toSend);
         try {
             await this.httpClient.post(body, { keepalive: options?.keepalive });

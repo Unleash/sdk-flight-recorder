@@ -2,16 +2,19 @@
 
 Snapshot of where the port stands. **This file goes stale fast** — update it each TDD step or treat it as a handoff snapshot only.
 
-Last updated: 2026-05-15 (one `TimerScheduler` + injected `Timer`; plain tests, no fake timers)
+Last updated: 2026-05-15 (`EventBuffer` extracted; buffer/seen/dedup/cap logic isolated from recorder lifecycle)
 
 ## What's built
+
+`src/event-buffer.ts`
+- `EventBuffer<T>` — generic class for buffering, dedup, and cap. `add(event): AddResult` returns `'added' | 'duplicate' | 'overflow'`. `drain(): T[]` splices and clears the seen set atomically. `size` getter. `maxSize` cap optional (drop new events on overflow). Dedup via `JSON.stringify` key, first-seen-wins, cleared on drain.
 
 `src/flight-recorder.ts`
 - `FlightRecorder` with explicit DI: `{ url, clientKey, fetch, scheduler, batch?, retry?, onError? }`. Collaborators required (no defaults); `batch`, `retry?: { retries }`, `onError` opt-in. Only retry knob is `retries` — backoff/cap/status-codes/timeout all use ky's defaults.
 - Constructor builds an `HttpClient` once and schedules `scheduler.runEvery(flushAfterMs, () => this.flush())` when `flushAfterMs` is set. The scheduler is contractually required to await the handler before the next tick — so periodic flushes naturally serialize.
-- `record(event)` — pushes to buffer (no-op if closed); fires `void this.flush()` when `buffer.length >= batch.flushAt`.
-- `flush()` — no-op if closed or empty; otherwise splices the buffer, posts via `httpClient`, calls `onError` on persistent failure.
-- `close()` — `await scheduler.stop()` (resolves after any in-flight periodic handler settles), runs a final `flush()`, then marks status closed (status flip after the flush so its own guard doesn't skip the drain).
+- `record(event)` — delegates to `this.buffer.add()`; responds to `AddResult`: duplicate → silent return, overflow → `onError('queueFull')`, added → check `flushAt` trigger. No-op if closed.
+- `flush()` — no-op if closed or `buffer.size === 0`; otherwise drains via `buffer.drain()`, posts via `httpClient`, calls `onError` on persistent failure.
+- `close()` — `await scheduler.stop()` (resolves after any in-flight periodic handler settles), runs a final `flush({ keepalive: true })`, then marks status closed (status flip after the flush so its own guard doesn't skip the drain).
 - **No recorder-side in-flight tracking.** The scheduler tracks the periodic handler so `await scheduler.stop()` covers the periodic-flush case. The size-trigger (`void this.flush()` in `record`) and manual `flush()` calls can still race; acceptable for dogfooding.
 - Types: `ImpressionEvent` (discriminated by `eventType: 'isEnabled' | 'getVariant'`, now includes required `timestamp: string` matching the Unleash JS SDK emit shape), `CustomEvent` (`eventType: 'custom'`), `ErrorInfo` (currently single variant), `FlightRecorderOptions` (nested `batch?: { flushAt?, flushAfterMs? }`, `retry?: { retries }`).
 

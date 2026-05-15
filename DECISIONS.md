@@ -174,6 +174,14 @@ The reference design's envelope (`schemaVersion`, `source`, `appName`, `environm
 
 *Browser keepalive constraint:* at ~300–400 bytes per event, 64 KB fits roughly 150–200 events. `maxBufferSize` should be set well below that for browser callers using `close()` on unload.
 
+## `EventBuffer<T>` extracted from `FlightRecorder`
+
+Buffer state (array, dedup set, cap rule) was inlined in `FlightRecorder`. Extracted into `EventBuffer<T>` in `src/event-buffer.ts`. `add(event): AddResult` returns a discriminated `'added' | 'duplicate' | 'overflow'` signal; the recorder reads the result and decides what observability / flush actions to take. `drain(): T[]` splices the array and clears the seen set atomically. Generic over `T` — the buffer doesn't inspect event shape; it stringifies opaquely.
+
+*Why this split:* the recorder's concerns are lifecycle/status, batching policy, and HTTP transport. Buffer state (how many events are pending, are any duplicates, is the cap exceeded) is a distinct invariant. Extracting it makes the invariant independently testable (step 2 will add `src/event-buffer.test.ts`) and shrinks `record()` and `flush()` to policy logic only.
+
+*Why the recorder still owns `flushAt` / `onError`:* `flushAt` is a policy decision about when to trigger a network send — it belongs next to the HTTP client logic, not inside the buffer. `onError` is an observability surface; `EventBuffer` returning `'overflow'` instead of calling a callback keeps the buffer decoupled from the recorder's observability contract.
+
 ## `retryDelay` option on `HttpClient` — test escape hatch, ky default in production
 
 `HttpClientOptions.retryDelay?: (attemptCount: number) => number` is an optional pass-through to ky's `retry.delay`. When unset (production default), ky's exponential backoff applies. Tests pass `retryDelay: () => 0` so the retry-coverage test runs in ~10ms instead of ~310ms. *Why:* the HttpClient retry test covers a real choice we make (opting POST into ky's retry list via `methods: ['post']`), and renaming it from `'retries the failed fetch after one attempt and then succeeds'` to `'retries POST requests when retries is configured'` makes that value visible. But paying ~300ms per CI run for that single assertion is wasteful — the delay is incidental to what the test asserts. Exposing `retryDelay` lets the test override it without changing production behavior. The option is not surfaced on `FlightRecorderOptions` yet; if a production caller ever needs a custom curve, add it then with the test that demands it (per [[feedback-design-taste]]).

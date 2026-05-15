@@ -84,6 +84,15 @@ describe('FlightRecorder', () => {
         recorder.record(event);
     });
 
+    it('throws when maxBufferSize is set without flushAt', () => {
+        expect(() =>
+            createRecorder({
+                // @ts-expect-error -- intentionally bypassing type guard to verify runtime check
+                batch: { maxBufferSize: 100 },
+            }),
+        ).toThrow('batch.flushAt is required when batch.maxBufferSize is set');
+    });
+
     it('can flush with no events', async () => {
         const recorder = createRecorder();
         await recorder.flush();
@@ -280,7 +289,7 @@ describe('FlightRecorder', () => {
 
         const recorder = createRecorder({
             fetch: fakeFetch,
-            batch: { maxBufferSize: 2 },
+            batch: { flushAt: 10, maxBufferSize: 2 },
             onError: (info) => errors.push(info),
         });
 

@@ -27,14 +27,22 @@ export type ErrorInfo =
 
 type RecorderStatus = 'open' | 'closed';
 
+/**
+ * Options for batching events. If `flushAt` is set, the recorder will flush when the buffer reaches that size.
+ * If `flushAfterMs` is set, the recorder will flush after that amount of time has passed since the last flush.
+ * If `maxBufferSize` is set, the recorder will drop new events and call `onError` when the buffer reaches that size.
+ * `maxBufferSize` requires `flushAt` to be set.
+ */
+export type BatchOptions =
+    | { flushAt: number; flushAfterMs?: number; maxBufferSize?: number }
+    | { flushAt?: number; flushAfterMs?: number; maxBufferSize?: never };
+
 export type FlightRecorderOptions = {
     url: string;
     clientKey: string;
     fetch: typeof fetch;
     scheduler: Scheduler;
-    batch?:
-        | { flushAt: number; flushAfterMs?: number; maxBufferSize?: number }
-        | { flushAt?: number; flushAfterMs?: number; maxBufferSize?: never };
+    batch?: BatchOptions;
     retry?: {
         retries: number;
     };

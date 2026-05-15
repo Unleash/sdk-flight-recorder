@@ -32,11 +32,9 @@ export type FlightRecorderOptions = {
     clientKey: string;
     fetch: typeof fetch;
     scheduler: Scheduler;
-    batch?: {
-        flushAt?: number;
-        flushAfterMs?: number;
-        maxBufferSize?: number;
-    };
+    batch?:
+        | { flushAt: number; flushAfterMs?: number; maxBufferSize?: number }
+        | { flushAt?: number; flushAfterMs?: number; maxBufferSize?: never };
     retry?: {
         retries: number;
     };
@@ -66,6 +64,11 @@ export class FlightRecorder {
         this.scheduler = options.scheduler;
         this.flushAt = options.batch?.flushAt;
         this.maxBufferSize = options.batch?.maxBufferSize;
+        if (this.maxBufferSize !== undefined && this.flushAt === undefined) {
+            throw new Error(
+                'batch.flushAt is required when batch.maxBufferSize is set',
+            );
+        }
         this.onError = options.onError;
         const flushAfterMs = options.batch?.flushAfterMs;
         if (flushAfterMs !== undefined) {

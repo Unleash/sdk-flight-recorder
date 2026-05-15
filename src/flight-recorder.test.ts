@@ -234,6 +234,38 @@ describe('FlightRecorder', () => {
         expect(fetchCalls).toBe(1);
     });
 
+    it('a full buffer drops the event and reports queueFull through onError', () => {
+        const errors: ErrorInfo[] = [];
+        const recorder = createRecorder({
+            batch: { flushAt: 5, maxBufferSize: 2 },
+            onError: (info) => errors.push(info),
+        });
+
+        recorder.record({ ...defaultImpressionEvent, featureName: 'flag-1' });
+        recorder.record({ ...defaultImpressionEvent, featureName: 'flag-2' });
+        recorder.record({ ...defaultImpressionEvent, featureName: 'flag-3' });
+
+        expect(errors).toMatchObject([{ reason: 'queueFull', droppedEventCount: 1 }]);
+    });
+
+    it('a duplicate event recorded within one flush window reaches the wire only once', async () => {
+        const snapshots: Array<Promise<RequestSnapshot>> = [];
+        const fakeFetch: typeof fetch = async (input) => {
+            snapshots.push(snapshotRequest(input as Request));
+            return new Response();
+        };
+
+        const recorder = createRecorder({ fetch: fakeFetch });
+        recorder.record(defaultImpressionEvent);
+        recorder.record(defaultImpressionEvent);
+        await recorder.flush();
+
+        const [snapshot] = await Promise.all(snapshots);
+        expect(snapshot).toMatchObject({
+            body: `${JSON.stringify(defaultImpressionEvent)}\n`,
+        });
+    });
+
     it('invokes onError when the transport fails', async () => {
         const fakeFetch: typeof fetch = async () => {
             throw new TypeError('Failed to fetch');

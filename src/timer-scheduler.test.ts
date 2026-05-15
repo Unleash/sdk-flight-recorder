@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ControllableTimer } from './timer.js';
-import { TimerScheduler } from './fake-scheduler.js';
+import { TimerScheduler } from './timer-scheduler.js';
 
 const createGate = () => {
     let open!: () => void;

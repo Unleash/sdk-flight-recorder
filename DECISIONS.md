@@ -184,6 +184,22 @@ Buffer state (array, dedup set, cap rule) was inlined in `FlightRecorder`. Extra
 
 *Why the recorder still owns `flushAt` / `onError`:* `flushAt` is a policy decision about when to trigger a network send — it belongs next to the HTTP client logic, not inside the buffer. `onError` is an observability surface; `EventBuffer` returning `'overflow'` instead of calling a callback keeps the buffer decoupled from the recorder's observability contract.
 
+## `CustomEvent` shape mirrors `ImpressionEvent`
+
+`CustomEvent` is defined with the same `eventType / eventId / timestamp / context` prefix as `ImpressionEvent`, plus `eventName: string` (parallels `featureName`) and `payload?: Record<string, unknown>` for structured custom data. *Why:* symmetric shapes make call sites readable and let ClickHouse's wide-table model query both event types with the same column conventions. No upstream SDK shape was treated as canonical — we own this type. `payload` is narrowed to `Record<string, unknown>` (not bare `unknown`) to push callers toward ClickHouse-queryable objects while still accepting arbitrary nested data inside.
+
+## Custom events dedup via the same `semanticEventKey` as impressions
+
+`eventName + context + payload` form the semantic identity for custom events — the same `semanticEventKey` function (strips `eventId`/`timestamp`, JSON-stringifies the rest) handles both event types. *Why:* React-render-style identical re-emits are the dominant duplicate source for both types; uniform treatment keeps `EventBuffer`'s `dedupKey` injection point single-purpose. Tradeoff accepted: rapid identical user actions within one flush window collapse to one event on the wire — acceptable at dogfooding scope. Pinned by `'sends custom events with the same eventName but different payloads separately'`.
+
+## Heterogeneous batches: impressions and custom events in one NDJSON body
+
+The recorder ships heterogeneous batches — `ImpressionEvent` and `CustomEvent` objects flow through one `EventBuffer<ImpressionEvent | CustomEvent>` and serialize into a single NDJSON body per flush. *Why:* one HTTP round-trip per flush window regardless of event-type mix; the ingestion side discriminates by `eventType`. Pinned by `'ships both impression and custom events in one batch'`.
+
+## `CustomEvent.payload` ships verbatim — no validation or coercion
+
+`payload?: Record<string, unknown>` is serialized as-is via `JSON.stringify`; nothing inside is inspected, coerced, or re-parsed. *Why:* structured arbitrary application signal is the entire point of custom events; the `Record` constraint pushes callers toward ClickHouse-queryable shapes, but everything inside (nested objects, arrays, scalar values) stays untouched. Pinned by `'preserves nested payload data on the wire'`.
+
 ## `retryDelay` option on `HttpClient` — test escape hatch, ky default in production
 
 `HttpClientOptions.retryDelay?: (attemptCount: number) => number` is an optional pass-through to ky's `retry.delay`. When unset (production default), ky's exponential backoff applies. Tests pass `retryDelay: () => 0` so the retry-coverage test runs in ~10ms instead of ~310ms. *Why:* the HttpClient retry test covers a real choice we make (opting POST into ky's retry list via `methods: ['post']`), and renaming it from `'retries the failed fetch after one attempt and then succeeds'` to `'retries POST requests when retries is configured'` makes that value visible. But paying ~300ms per CI run for that single assertion is wasteful — the delay is incidental to what the test asserts. Exposing `retryDelay` lets the test override it without changing production behavior. The option is not surfaced on `FlightRecorderOptions` yet; if a production caller ever needs a custom curve, add it then with the test that demands it (per [[feedback-design-taste]]).

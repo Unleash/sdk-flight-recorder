@@ -20,9 +20,10 @@ export type ImpressionEvent = {
 export type CustomEvent = {
     eventType: 'custom';
     eventId: string;
+    timestamp: string;
     context: Record<string, unknown>;
-    name: string;
-    payload?: unknown;
+    eventName: string;
+    payload?: Record<string, unknown>;
 };
 
 export type ErrorInfo =

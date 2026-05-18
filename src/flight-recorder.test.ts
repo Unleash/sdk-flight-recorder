@@ -59,32 +59,16 @@ const makeImpressionEvent = (overrides: Partial<ImpressionEvent> = {}): Impressi
     ...overrides,
 });
 
+const makeCustomEvent = (overrides: Partial<CustomEvent> = {}): CustomEvent => ({
+    eventType: 'custom',
+    eventId: randomUUID(),
+    timestamp: new Date().toISOString(),
+    context: {},
+    eventName: 'default-custom-event',
+    ...overrides,
+});
+
 describe('FlightRecorder', () => {
-    it('records an impression', () => {
-        const recorder = createRecorder();
-        const event: ImpressionEvent = {
-            eventType: 'isEnabled',
-            eventId: randomUUID(),
-            timestamp: new Date().toISOString(),
-            context: { userId: 'u-42', sessionId: 's-7' },
-            enabled: true,
-            featureName: 'demo.flag',
-        };
-        recorder.record(event);
-    });
-
-    it('records a custom event', () => {
-        const recorder = createRecorder();
-        const event: CustomEvent = {
-            eventType: 'custom',
-            eventId: randomUUID(),
-            context: { userId: 'u-42' },
-            name: 'signup',
-            payload: { plan: 'pro' },
-        };
-        recorder.record(event);
-    });
-
     it('throws when maxBufferSize is set without flushAt', () => {
         expect(() =>
             createRecorder({
@@ -133,31 +117,6 @@ describe('FlightRecorder', () => {
                 body: `${JSON.stringify(event)}\n`,
             },
         ]);
-    });
-
-    it('preserves the timestamp from a recorded impression on the wire', async () => {
-        const snapshots: Array<Promise<RequestSnapshot>> = [];
-        const fakeFetch: typeof fetch = async (input) => {
-            snapshots.push(snapshotRequest(input as Request));
-            return new Response();
-        };
-
-        const recorder = createRecorder({ fetch: fakeFetch });
-        const event: ImpressionEvent = {
-            eventType: 'isEnabled',
-            eventId: '11111111-1111-4111-8111-111111111111',
-            timestamp: '2026-05-14 12:00:00.000',
-            context: {},
-            enabled: true,
-            featureName: 'demo.flag',
-        };
-        recorder.record(event);
-        await recorder.flush();
-
-        const [request] = await Promise.all(snapshots);
-        expect(JSON.parse(request!.body.trim())).toMatchObject({
-            timestamp: '2026-05-14 12:00:00.000',
-        });
     });
 
     it('an event recorded mid-flush is sent on the next flush', async () => {
@@ -249,7 +208,54 @@ describe('FlightRecorder', () => {
         expect(errors).toMatchObject([{ reason: 'queueFull', droppedEventCount: 1 }]);
     });
 
-    it('a duplicate event recorded within one flush window reaches the wire only once', async () => {
+    it('ships both impression and custom events in one batch', async () => {
+        const snapshots: Array<Promise<RequestSnapshot>> = [];
+        const fakeFetch: typeof fetch = async (input) => {
+            snapshots.push(snapshotRequest(input as Request));
+            return new Response();
+        };
+
+        const payload = { plan: 'pro', features: ['analytics', 'sso'], metadata: { tier: 1, trial: false } };
+        const impression = makeImpressionEvent({ featureName: 'feature-x' });
+        const custom = makeCustomEvent({
+            eventName: 'purchase',
+            timestamp: '2026-01-15 09:30:00.000',
+            payload,
+        });
+        const recorder = createRecorder({ fetch: fakeFetch });
+        recorder.record(impression);
+        recorder.record(custom);
+        await recorder.flush();
+
+        const [snapshot] = await Promise.all(snapshots);
+        const lines = snapshot!.body.trim().split('\n').map((l) => JSON.parse(l));
+        expect(lines).toMatchObject([
+            { eventType: 'isEnabled', featureName: 'feature-x' },
+            { eventType: 'custom', eventName: 'purchase', timestamp: '2026-01-15 09:30:00.000', payload },
+        ]);
+    });
+
+    it('sends custom events with the same eventName but different payloads separately', async () => {
+        const snapshots: Array<Promise<RequestSnapshot>> = [];
+        const fakeFetch: typeof fetch = async (input) => {
+            snapshots.push(snapshotRequest(input as Request));
+            return new Response();
+        };
+
+        const recorder = createRecorder({ fetch: fakeFetch });
+        recorder.record(makeCustomEvent({ eventName: 'signup', payload: { plan: 'pro' } }));
+        recorder.record(makeCustomEvent({ eventName: 'signup', payload: { plan: 'free' } }));
+        await recorder.flush();
+
+        const [snapshot] = await Promise.all(snapshots);
+        const lines = snapshot!.body.trim().split('\n').map((l) => JSON.parse(l));
+        expect(lines).toMatchObject([
+            { eventName: 'signup', payload: { plan: 'pro' } },
+            { eventName: 'signup', payload: { plan: 'free' } },
+        ]);
+    });
+
+    it('duplicate events recorded within one flush window reach the wire only once', async () => {
         const snapshots: Array<Promise<RequestSnapshot>> = [];
         const fakeFetch: typeof fetch = async (input) => {
             snapshots.push(snapshotRequest(input as Request));
@@ -259,10 +265,16 @@ describe('FlightRecorder', () => {
         const recorder = createRecorder({ fetch: fakeFetch });
         recorder.record(makeImpressionEvent({ featureName: 'demo.flag' }));
         recorder.record(makeImpressionEvent({ featureName: 'demo.flag' }));
+        recorder.record(makeCustomEvent({ eventName: 'signup', payload: { plan: 'pro' } }));
+        recorder.record(makeCustomEvent({ eventName: 'signup', payload: { plan: 'pro' } }));
         await recorder.flush();
 
         const [snapshot] = await Promise.all(snapshots);
-        expect(snapshot!.body.trim().split('\n')).toHaveLength(1);
+        const lines = snapshot!.body.trim().split('\n').map((l) => JSON.parse(l));
+        expect(lines).toMatchObject([
+            { eventType: 'isEnabled', featureName: 'demo.flag' },
+            { eventType: 'custom', eventName: 'signup', payload: { plan: 'pro' } },
+        ]);
     });
 
     it('invokes onError when the transport fails', async () => {

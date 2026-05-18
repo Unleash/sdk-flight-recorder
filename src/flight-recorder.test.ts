@@ -31,6 +31,12 @@ const snapshotRequest = async (req: Request): Promise<RequestSnapshot> => {
     };
 };
 
+const ndjsonToArray = (body: string): unknown[] =>
+    body
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+
 const defaultUrl = 'https://example/events';
 const defaultFetch: typeof fetch = async () => new Response();
 const defaultClientKey = 'default-client-key';
@@ -49,7 +55,9 @@ const createRecorder = (overrides: Partial<FlightRecorderOptions> = {}) =>
         ...overrides,
     });
 
-const makeImpressionEvent = (overrides: Partial<ImpressionEvent> = {}): ImpressionEvent => ({
+const makeImpressionEvent = (
+    overrides: Partial<ImpressionEvent> = {},
+): ImpressionEvent => ({
     eventType: 'isEnabled',
     eventId: randomUUID(),
     timestamp: new Date().toISOString(),
@@ -59,7 +67,9 @@ const makeImpressionEvent = (overrides: Partial<ImpressionEvent> = {}): Impressi
     ...overrides,
 });
 
-const makeCustomEvent = (overrides: Partial<CustomEvent> = {}): CustomEvent => ({
+const makeCustomEvent = (
+    overrides: Partial<CustomEvent> = {},
+): CustomEvent => ({
     eventType: 'custom',
     eventId: randomUUID(),
     timestamp: new Date().toISOString(),
@@ -80,6 +90,7 @@ describe('FlightRecorder', () => {
 
     it('can flush with no events', async () => {
         const recorder = createRecorder();
+
         await recorder.flush();
     });
 
@@ -89,7 +100,6 @@ describe('FlightRecorder', () => {
             snapshots.push(snapshotRequest(input as Request));
             return new Response();
         };
-
         const recorder = createRecorder({
             url: 'https://configured.example/events',
             clientKey: 'default:development.real-key-shape',
@@ -103,6 +113,7 @@ describe('FlightRecorder', () => {
             enabled: true,
             featureName: 'demo.flag',
         };
+
         recorder.record(event);
         await recorder.flush();
 
@@ -134,7 +145,6 @@ describe('FlightRecorder', () => {
             }
             return new Response();
         };
-
         const recorder = createRecorder({ fetch: fakeFetch });
         const before = makeImpressionEvent({ featureName: 'before' });
         const during = makeImpressionEvent({ featureName: 'during' });
@@ -144,7 +154,6 @@ describe('FlightRecorder', () => {
         recorder.record(during);
         releaseFirstFetch();
         await flushInFlight;
-
         await recorder.flush();
 
         expect(await Promise.all(snapshots)).toMatchObject([
@@ -190,7 +199,6 @@ describe('FlightRecorder', () => {
         expect(fetchCalls).toBe(0);
 
         await timer.advance(2000);
-
         expect(fetchCalls).toBe(1);
     });
 
@@ -205,7 +213,9 @@ describe('FlightRecorder', () => {
         recorder.record(makeImpressionEvent({ featureName: 'flag-2' }));
         recorder.record(makeImpressionEvent({ featureName: 'flag-3' }));
 
-        expect(errors).toMatchObject([{ reason: 'queueFull', droppedEventCount: 1 }]);
+        expect(errors).toMatchObject([
+            { reason: 'queueFull', droppedEventCount: 1 },
+        ]);
     });
 
     it('ships both impression and custom events in one batch', async () => {
@@ -214,8 +224,11 @@ describe('FlightRecorder', () => {
             snapshots.push(snapshotRequest(input as Request));
             return new Response();
         };
-
-        const payload = { plan: 'pro', features: ['analytics', 'sso'], metadata: { tier: 1, trial: false } };
+        const payload = {
+            plan: 'pro',
+            features: ['analytics', 'sso'],
+            metadata: { tier: 1, trial: false },
+        };
         const impression = makeImpressionEvent({ featureName: 'feature-x' });
         const custom = makeCustomEvent({
             eventName: 'purchase',
@@ -223,15 +236,21 @@ describe('FlightRecorder', () => {
             payload,
         });
         const recorder = createRecorder({ fetch: fakeFetch });
+
         recorder.record(impression);
         recorder.record(custom);
         await recorder.flush();
 
         const [snapshot] = await Promise.all(snapshots);
-        const lines = snapshot!.body.trim().split('\n').map((l) => JSON.parse(l));
+        const lines = ndjsonToArray(snapshot!.body);
         expect(lines).toMatchObject([
             { eventType: 'isEnabled', featureName: 'feature-x' },
-            { eventType: 'custom', eventName: 'purchase', timestamp: '2026-01-15 09:30:00.000', payload },
+            {
+                eventType: 'custom',
+                eventName: 'purchase',
+                timestamp: '2026-01-15 09:30:00.000',
+                payload,
+            },
         ]);
     });
 
@@ -241,14 +260,18 @@ describe('FlightRecorder', () => {
             snapshots.push(snapshotRequest(input as Request));
             return new Response();
         };
-
         const recorder = createRecorder({ fetch: fakeFetch });
-        recorder.record(makeCustomEvent({ eventName: 'signup', payload: { plan: 'pro' } }));
-        recorder.record(makeCustomEvent({ eventName: 'signup', payload: { plan: 'free' } }));
+
+        recorder.record(
+            makeCustomEvent({ eventName: 'signup', payload: { plan: 'pro' } }),
+        );
+        recorder.record(
+            makeCustomEvent({ eventName: 'signup', payload: { plan: 'free' } }),
+        );
         await recorder.flush();
 
         const [snapshot] = await Promise.all(snapshots);
-        const lines = snapshot!.body.trim().split('\n').map((l) => JSON.parse(l));
+        const lines = ndjsonToArray(snapshot!.body);
         expect(lines).toMatchObject([
             { eventName: 'signup', payload: { plan: 'pro' } },
             { eventName: 'signup', payload: { plan: 'free' } },
@@ -261,19 +284,27 @@ describe('FlightRecorder', () => {
             snapshots.push(snapshotRequest(input as Request));
             return new Response();
         };
-
         const recorder = createRecorder({ fetch: fakeFetch });
+
         recorder.record(makeImpressionEvent({ featureName: 'demo.flag' }));
         recorder.record(makeImpressionEvent({ featureName: 'demo.flag' }));
-        recorder.record(makeCustomEvent({ eventName: 'signup', payload: { plan: 'pro' } }));
-        recorder.record(makeCustomEvent({ eventName: 'signup', payload: { plan: 'pro' } }));
+        recorder.record(
+            makeCustomEvent({ eventName: 'signup', payload: { plan: 'pro' } }),
+        );
+        recorder.record(
+            makeCustomEvent({ eventName: 'signup', payload: { plan: 'pro' } }),
+        );
         await recorder.flush();
 
         const [snapshot] = await Promise.all(snapshots);
-        const lines = snapshot!.body.trim().split('\n').map((l) => JSON.parse(l));
+        const lines = ndjsonToArray(snapshot!.body);
         expect(lines).toMatchObject([
             { eventType: 'isEnabled', featureName: 'demo.flag' },
-            { eventType: 'custom', eventName: 'signup', payload: { plan: 'pro' } },
+            {
+                eventType: 'custom',
+                eventName: 'signup',
+                payload: { plan: 'pro' },
+            },
         ]);
     });
 
@@ -282,11 +313,11 @@ describe('FlightRecorder', () => {
             throw new TypeError('Failed to fetch');
         };
         const errors: ErrorInfo[] = [];
-
         const recorder = createRecorder({
             fetch: fakeFetch,
             onError: (info) => errors.push(info),
         });
+
         recorder.record(makeImpressionEvent());
         await recorder.flush();
 
@@ -325,8 +356,8 @@ describe('FlightRecorder', () => {
             return new Response();
         };
         const recorder = createRecorder({ fetch: fakeFetch });
-
         const event = makeImpressionEvent();
+
         recorder.record(event);
         await recorder.close();
 

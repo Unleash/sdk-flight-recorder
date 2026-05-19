@@ -6,7 +6,6 @@ import { semanticEventKey } from './semantic-event-key.js';
 
 export type ImpressionEvent = {
   eventType: 'isEnabled' | 'getVariant';
-  eventId: string;
   timestamp: string;
   context: Record<string, unknown>;
   enabled: boolean;
@@ -17,7 +16,6 @@ export type ImpressionEvent = {
 
 export type CustomEvent = {
   eventType: 'custom';
-  eventId: string;
   timestamp: string;
   context: Record<string, unknown>;
   eventName: string;

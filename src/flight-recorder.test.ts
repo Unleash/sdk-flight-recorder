@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { NetworkError } from 'ky';
 import { describe, expect, it } from 'vitest';
 import {
@@ -61,7 +60,6 @@ const createRecorder = (overrides: Partial<FlightRecorderOptions> = {}) =>
 
 const makeImpressionEvent = (overrides: Partial<ImpressionEvent> = {}): ImpressionEvent => ({
   eventType: 'isEnabled',
-  eventId: randomUUID(),
   timestamp: new Date().toISOString(),
   context: {},
   enabled: true,
@@ -71,7 +69,6 @@ const makeImpressionEvent = (overrides: Partial<ImpressionEvent> = {}): Impressi
 
 const makeCustomEvent = (overrides: Partial<CustomEvent> = {}): CustomEvent => ({
   eventType: 'custom',
-  eventId: randomUUID(),
   timestamp: new Date().toISOString(),
   context: {},
   eventName: 'default-custom-event',
@@ -107,7 +104,6 @@ describe('FlightRecorder', () => {
     });
     const event: ImpressionEvent = {
       eventType: 'isEnabled',
-      eventId: '11111111-1111-4111-8111-111111111111',
       timestamp: '2026-05-14 10:00:00.000',
       context: {},
       enabled: true,

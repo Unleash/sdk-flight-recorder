@@ -4,7 +4,6 @@ import { semanticEventKey } from './semantic-event-key.js';
 
 const defaultImpression: ImpressionEvent = {
   eventType: 'isEnabled',
-  eventId: 'event-id-a',
   timestamp: '2026-01-01 00:00:00.000',
   context: {},
   enabled: true,
@@ -18,7 +17,6 @@ const makeImpression = (overrides: Partial<ImpressionEvent> = {}): ImpressionEve
 
 const defaultCustom: CustomEvent = {
   eventType: 'custom',
-  eventId: 'event-id-a',
   timestamp: '2026-01-01 00:00:00.000',
   context: {},
   eventName: 'signup',
@@ -30,15 +28,9 @@ const makeCustom = (overrides: Partial<CustomEvent> = {}): CustomEvent => ({
 });
 
 describe('semanticEventKey', () => {
-  it('treats two evaluations of the same flag as duplicates despite different eventId and timestamp', () => {
-    const first = makeImpression({
-      eventId: 'event-id-a',
-      timestamp: '2026-01-01 00:00:00.000',
-    });
-    const second = makeImpression({
-      eventId: 'event-id-b',
-      timestamp: '2026-12-31 23:59:59.999',
-    });
+  it('treats two evaluations of the same flag as duplicates despite different timestamps', () => {
+    const first = makeImpression({ timestamp: '2026-01-01 00:00:00.000' });
+    const second = makeImpression({ timestamp: '2026-12-31 23:59:59.999' });
 
     expect(semanticEventKey(first)).toBe(semanticEventKey(second));
   });
@@ -78,15 +70,9 @@ describe('semanticEventKey', () => {
     expect(semanticEventKey(isEnabled)).not.toBe(semanticEventKey(getVariant));
   });
 
-  it('treats two identical custom events as duplicates despite different eventId and timestamp', () => {
-    const first = makeCustom({
-      eventId: 'event-id-a',
-      timestamp: '2026-01-01 00:00:00.000',
-    });
-    const second = makeCustom({
-      eventId: 'event-id-b',
-      timestamp: '2026-12-31 23:59:59.999',
-    });
+  it('treats two identical custom events as duplicates despite different timestamps', () => {
+    const first = makeCustom({ timestamp: '2026-01-01 00:00:00.000' });
+    const second = makeCustom({ timestamp: '2026-12-31 23:59:59.999' });
 
     expect(semanticEventKey(first)).toBe(semanticEventKey(second));
   });

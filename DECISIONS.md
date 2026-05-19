@@ -228,3 +228,13 @@ The recorder ships heterogeneous batches — `ImpressionEvent` and `CustomEvent`
 | 10k events, 95% duplicates | ~0.80M events/sec | ~1.56M events/sec | 1.93× |
 
 Absolute throughput is machine-specific and will drift; the ~2× ratio is the durable claim — re-measure with `npm run bench`. *Scope:* this is the in-memory per-event CPU cost only; it does not change end-to-end recorder throughput, which is bounded by the HTTP flush.
+
+## `eventId` dropped from `ImpressionEvent` and `CustomEvent`
+
+Neither event type carries an `eventId` field. `record()` accepts events without one; nothing generates or forwards an id. *Why:* it was a passthrough field used by nothing. Client-side dedup (`semanticEventKey`) deliberately excludes it. It is not a retry-idempotency key either — `ky` retries resend the *identical* drained batch, and events never cross batch boundaries (`drain()` removes them), so retry-dedup is a per-*batch* concern, not per-event; a per-event id could not serve that role. And it carries no correlation value: the Unleash **Node** SDK emits no id on its impression event (`{ eventType, context, enabled, featureName, variant? }`), so an `eventId` would have been a freshly minted UUID correlating to nothing upstream.
+
+This reverses the earlier "keep SDK-provided UUIDv4 IDs for correlation" rationale, which assumed the SDK stamps an `eventId` on every evaluation — true of the *frontend* SDK, not the *Node* SDK we target. The stale "SDK stamps a fresh UUID (`eventId`)" claim in the "In-batch dedup via injected `dedupKey`" entry above is superseded here.
+
+*If retry-idempotent ingestion is later wanted:* add a per-batch `Idempotency-Key` header on the flush POST, reused across that batch's retries — not a per-event id.
+
+`timestamp` is kept: it is genuine event data for time-series queries in ClickHouse. It has the same "Node SDK does not emit it" gap — integrators currently supply it in the `on('impression', ...)` handler; making it recorder-generated is a separate open question.

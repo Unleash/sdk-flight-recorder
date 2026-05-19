@@ -9,11 +9,10 @@ import { semanticEventKey } from './semantic-event-key.js';
 // function replacer forces V8 off its fast-path serializer and is invoked
 // once per property of the whole event graph; that is what this measures.
 const replacerSemanticEventKey = (event: ImpressionEvent): string =>
-  JSON.stringify(event, (k, v) => (k === 'eventId' || k === 'timestamp' ? undefined : v));
+  JSON.stringify(event, (k, v) => (k === 'timestamp' ? undefined : v));
 
 const makeEvent = (i: number): ImpressionEvent => ({
   eventType: 'isEnabled',
-  eventId: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
   timestamp: '2026-01-01 00:00:00.000',
   context: {
     userId: `user-${i}`,

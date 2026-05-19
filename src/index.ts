@@ -1,15 +1,15 @@
-import { FlightRecorder } from './flight-recorder.js';
 import type { BatchOptions, FlightRecorderOptions } from './flight-recorder.js';
-import { TimerScheduler } from './timer-scheduler.js';
+import { FlightRecorder } from './flight-recorder.js';
 import { systemTimer } from './timer.js';
+import { TimerScheduler } from './timer-scheduler.js';
 
-export type { FlightRecorder } from './flight-recorder.js';
 export type {
-  FlightRecorderOptions,
   BatchOptions,
-  ErrorInfo,
-  ImpressionEvent,
   CustomEvent,
+  ErrorInfo,
+  FlightRecorder,
+  FlightRecorderOptions,
+  ImpressionEvent,
 } from './flight-recorder.js';
 
 // flushAt is a ceiling, not a target: the 10s timer does the routine

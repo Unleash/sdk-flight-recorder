@@ -1,4 +1,4 @@
-import type { ImpressionEvent, CustomEvent } from './flight-recorder.js';
+import type { CustomEvent, ImpressionEvent } from './flight-recorder.js';
 
 // Dedup key: two events are duplicates when identical except for eventId /
 // timestamp. Built from the identifying fields directly — no JSON.stringify
@@ -9,22 +9,20 @@ import type { ImpressionEvent, CustomEvent } from './flight-recorder.js';
 // segments cannot bleed across boundaries.
 const SEP = String.fromCharCode(0x1f);
 
-export const semanticEventKey = (
-    event: ImpressionEvent | CustomEvent,
-): string => {
-    if (event.eventType === 'custom') {
-        return [
-            'custom',
-            event.eventName,
-            JSON.stringify(event.context),
-            event.payload === undefined ? '' : JSON.stringify(event.payload),
-        ].join(SEP);
-    }
+export const semanticEventKey = (event: ImpressionEvent | CustomEvent): string => {
+  if (event.eventType === 'custom') {
     return [
-        event.eventType,
-        event.featureName,
-        event.variant ?? '',
-        event.enabled ? '1' : '0',
-        JSON.stringify(event.context),
+      'custom',
+      event.eventName,
+      JSON.stringify(event.context),
+      event.payload === undefined ? '' : JSON.stringify(event.payload),
     ].join(SEP);
+  }
+  return [
+    event.eventType,
+    event.featureName,
+    event.variant ?? '',
+    event.enabled ? '1' : '0',
+    JSON.stringify(event.context),
+  ].join(SEP);
 };

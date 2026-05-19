@@ -1,7 +1,8 @@
 import type { CustomEvent, ImpressionEvent } from './flight-recorder.js';
 
-// Dedup key: two events are duplicates when identical except for their
-// timestamp. Built from the identifying fields directly — no JSON.stringify
+// Dedup key: two events are duplicates when their identifying fields match —
+// the recorder-stamped `timestamp` is not part of identity. Built from those
+// fields directly — no JSON.stringify
 // replacer (a function replacer disables V8's fast-path serializer and is
 // invoked once per property of the whole object graph). Only context/payload
 // are JSON-serialized. Segments are joined with U+001F (unit separator):

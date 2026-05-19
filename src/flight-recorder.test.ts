@@ -1,5 +1,6 @@
 import { NetworkError } from 'ky';
 import { describe, expect, it } from 'vitest';
+import type { Clock } from './clock.js';
 import {
   type CustomEvent,
   type ErrorInfo,
@@ -48,6 +49,7 @@ const defaultScheduler: Scheduler = {
   stop: async () => {},
   getStatus: () => 'stopped',
 };
+const defaultClock: Clock = { now: () => '2026-01-01T00:00:00.000Z' };
 
 const createRecorder = (overrides: Partial<FlightRecorderOptions> = {}) =>
   new FlightRecorder({
@@ -55,12 +57,12 @@ const createRecorder = (overrides: Partial<FlightRecorderOptions> = {}) =>
     fetch: defaultFetch,
     clientKey: defaultClientKey,
     scheduler: defaultScheduler,
+    clock: defaultClock,
     ...overrides,
   });
 
 const makeImpressionEvent = (overrides: Partial<ImpressionEvent> = {}): ImpressionEvent => ({
   eventType: 'isEnabled',
-  timestamp: new Date().toISOString(),
   context: {},
   enabled: true,
   featureName: 'default-flag',
@@ -69,7 +71,6 @@ const makeImpressionEvent = (overrides: Partial<ImpressionEvent> = {}): Impressi
 
 const makeCustomEvent = (overrides: Partial<CustomEvent> = {}): CustomEvent => ({
   eventType: 'custom',
-  timestamp: new Date().toISOString(),
   context: {},
   eventName: 'default-custom-event',
   ...overrides,
@@ -104,7 +105,6 @@ describe('FlightRecorder', () => {
     });
     const event: ImpressionEvent = {
       eventType: 'isEnabled',
-      timestamp: '2026-05-14 10:00:00.000',
       context: {},
       enabled: true,
       featureName: 'demo.flag',
@@ -121,7 +121,7 @@ describe('FlightRecorder', () => {
           'content-type': 'application/ndjson',
           authorization: 'default:development.real-key-shape',
         },
-        body: `${JSON.stringify(event)}\n`,
+        body: `${JSON.stringify({ ...event, timestamp: defaultClock.now() })}\n`,
       },
     ]);
   });
@@ -153,8 +153,8 @@ describe('FlightRecorder', () => {
     await recorder.flush();
 
     expect(await Promise.all(snapshots)).toMatchObject([
-      { body: `${JSON.stringify(before)}\n` },
-      { body: `${JSON.stringify(during)}\n` },
+      { body: `${JSON.stringify({ ...before, timestamp: defaultClock.now() })}\n` },
+      { body: `${JSON.stringify({ ...during, timestamp: defaultClock.now() })}\n` },
     ]);
   });
 
@@ -226,7 +226,6 @@ describe('FlightRecorder', () => {
     const impression = makeImpressionEvent({ featureName: 'feature-x' });
     const custom = makeCustomEvent({
       eventName: 'purchase',
-      timestamp: '2026-01-15 09:30:00.000',
       payload,
     });
     const recorder = createRecorder({ fetch: fakeFetch });
@@ -241,7 +240,6 @@ describe('FlightRecorder', () => {
       {
         eventType: 'custom',
         eventName: 'purchase',
-        timestamp: '2026-01-15 09:30:00.000',
         payload,
       },
     ]);
@@ -346,7 +344,7 @@ describe('FlightRecorder', () => {
 
     const [snapshot] = await Promise.all(snapshots);
     expect(snapshot).toMatchObject({
-      body: `${JSON.stringify(event)}\n`,
+      body: `${JSON.stringify({ ...event, timestamp: defaultClock.now() })}\n`,
       keepalive: true,
     });
   });

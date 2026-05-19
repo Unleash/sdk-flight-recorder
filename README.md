@@ -28,18 +28,12 @@ const unleash = initialize({
 });
 
 // The Unleash Node SDK emits `impression` for every evaluation of a flag that
-// has impression data enabled. Its event has no timestamp — add one here.
-unleash.on('impression', (event) => {
-  recorder.record({
-    ...event,
-    timestamp: new Date().toISOString(),
-  });
-});
+// has impression data enabled — forward those straight into record().
+unleash.on('impression', (event) => recorder.record(event));
 
-// Custom events are caller-originated — supply the timestamp yourself.
+// Custom events are caller-originated.
 recorder.record({
   eventType: 'custom',
-  timestamp: new Date().toISOString(),
   context: { userId: 'user-1' },
   eventName: 'checkout-completed',
   payload: { plan: 'enterprise', amount: 99 },
@@ -50,8 +44,10 @@ await recorder.close();
 ```
 
 `record(event)` accepts an `ImpressionEvent` or a `CustomEvent`; duplicates
-within a flush window are dropped. Events are sent automatically per the
-batching policy below — `flush()` is available for a manual send.
+within a flush window are dropped. The recorder stamps each event with a
+`timestamp` on `record()` — events carry no timestamp on the way in. Events
+are sent automatically per the batching policy below — `flush()` is available
+for a manual send.
 
 ## Defaults
 

@@ -4,7 +4,6 @@ import { toNdjson } from './ndjson.js';
 
 const makeEvent = (i: number): ImpressionEvent => ({
   eventType: 'isEnabled',
-  timestamp: '2026-01-01 00:00:00.000',
   context: {
     userId: `user-${i}`,
     sessionId: `session-${i % 500}`,

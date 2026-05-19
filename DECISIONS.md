@@ -238,3 +238,13 @@ This reverses the earlier "keep SDK-provided UUIDv4 IDs for correlation" rationa
 *If retry-idempotent ingestion is later wanted:* add a per-batch `Idempotency-Key` header on the flush POST, reused across that batch's retries — not a per-event id.
 
 `timestamp` is kept: it is genuine event data for time-series queries in ClickHouse. It has the same "Node SDK does not emit it" gap — integrators currently supply it in the `on('impression', ...)` handler; making it recorder-generated is a separate open question.
+
+## `Clock` collaborator; recorder owns `timestamp`
+
+`ImpressionEvent`/`CustomEvent` — the `record()` input types — carry no `timestamp`. `record()` stamps every event via an injected `Clock` (`{ now(): string }`, `src/clock.ts`); the buffered and wire shape is the internal `StampedEvent = (ImpressionEvent | CustomEvent) & { timestamp: string }`. *Why:* the Unleash **Node** SDK emits no timestamp on impression events (`{ eventType, context, enabled, featureName, variant? }`), so requiring one pushed a mechanical `new Date().toISOString()` onto every integration handler — the same boilerplate the dropped `eventId` was (see the entry above). `record()` runs synchronously right after the event occurs, so record-time *is* the event time.
+
+*Why the recorder owns it outright, not an optional caller value:* a caller-supplied `timestamp` was briefly allowed and then removed. Typed as a bare `string` it is unvalidated — a malformed value (`'yesterday'`, a stray epoch) flows into the NDJSON batch and fails the ClickHouse insert for the whole block. No real integration path supplies a timestamp anyway (neither the Node SDK nor the frontend SDK emits one on the shape we consume); the only genuine use — historical backfill/replay — is not a live-recorder concern. Making the recorder the sole authority removes the footgun by construction: callers cannot get the format wrong because they cannot set it.
+
+*Why a separate `Clock`, not `now()` on `Timer`/`Scheduler`:* this honours the "`Scheduler` collaborator with `runEvery`, not `Clock`" decision above — scheduling recurring work and reading the current instant are distinct concerns. `Timer`/`Scheduler` keep their scheduling-only surface; `Clock` is read-only time. That earlier decision rejected a `Clock` that *bundled* `now()` with `setTimeout`; a `now()`-only `Clock` alongside the scheduler keeps each abstraction single-purpose.
+
+`Clock` is required DI on `FlightRecorderOptions` (no bastard injection). The composition root (`createFlightRecorder`) wires `systemClock` (`() => new Date().toISOString()`); tests inject a fixed-value clock. `semanticEventKey` excludes `timestamp` from the dedup key, so two duplicate `record()` calls stamped at different instants still collapse.

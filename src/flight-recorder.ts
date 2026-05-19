@@ -1,3 +1,4 @@
+import type { Clock } from './clock.js';
 import { EventBuffer } from './event-buffer.js';
 import { createHttpClient, type HttpClient } from './http-client.js';
 import { toNdjson } from './ndjson.js';
@@ -6,7 +7,6 @@ import { semanticEventKey } from './semantic-event-key.js';
 
 export type ImpressionEvent = {
   eventType: 'isEnabled' | 'getVariant';
-  timestamp: string;
   context: Record<string, unknown>;
   enabled: boolean;
   featureName: string;
@@ -16,11 +16,14 @@ export type ImpressionEvent = {
 
 export type CustomEvent = {
   eventType: 'custom';
-  timestamp: string;
   context: Record<string, unknown>;
   eventName: string;
   payload?: Record<string, unknown>;
 };
+
+// What the buffer holds and the wire carries: a recorded event plus the
+// `timestamp` that `record()` stamps on it.
+type StampedEvent = (ImpressionEvent | CustomEvent) & { timestamp: string };
 
 export type ErrorInfo =
   | { reason: 'persistentFailure'; droppedEventCount: number; error: unknown }
@@ -43,6 +46,7 @@ export type FlightRecorderOptions = {
   clientKey: string;
   fetch: typeof fetch;
   scheduler: Scheduler;
+  clock: Clock;
   batch?: BatchOptions;
   retry?: {
     retries: number;
@@ -53,9 +57,10 @@ export type FlightRecorderOptions = {
 export class FlightRecorder {
   private readonly httpClient: HttpClient;
   private readonly scheduler: Scheduler;
+  private readonly clock: Clock;
   private readonly flushAt: number | undefined;
   private readonly onError: ((info: ErrorInfo) => void) | undefined;
-  private readonly buffer: EventBuffer<ImpressionEvent | CustomEvent>;
+  private readonly buffer: EventBuffer<StampedEvent>;
   private status: RecorderStatus = 'open';
 
   constructor(options: FlightRecorderOptions) {
@@ -69,12 +74,16 @@ export class FlightRecorder {
       retries: options.retry?.retries ?? 0,
     });
     this.scheduler = options.scheduler;
+    this.clock = options.clock;
     this.flushAt = options.batch?.flushAt;
     const maxBufferSize = options.batch?.maxBufferSize;
     if (maxBufferSize !== undefined && this.flushAt === undefined) {
       throw new Error('batch.flushAt is required when batch.maxBufferSize is set');
     }
-    this.buffer = new EventBuffer({ maxSize: maxBufferSize, dedupKey: semanticEventKey });
+    this.buffer = new EventBuffer<StampedEvent>({
+      maxSize: maxBufferSize,
+      dedupKey: semanticEventKey,
+    });
     this.onError = options.onError;
     const flushAfterMs = options.batch?.flushAfterMs;
     if (flushAfterMs !== undefined) {
@@ -84,7 +93,7 @@ export class FlightRecorder {
 
   record(event: ImpressionEvent | CustomEvent): void {
     if (this.status === 'closed') return;
-    const result = this.buffer.add(event);
+    const result = this.buffer.add({ ...event, timestamp: this.clock.now() });
     if (result === 'duplicate') return;
     if (result === 'overflow') {
       this.onError?.({ reason: 'queueFull', droppedEventCount: 1 });

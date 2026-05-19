@@ -1,3 +1,4 @@
+import { systemClock } from './clock.js';
 import type { BatchOptions, FlightRecorderOptions } from './flight-recorder.js';
 import { FlightRecorder } from './flight-recorder.js';
 import { systemTimer } from './timer.js';
@@ -25,12 +26,13 @@ const DEFAULT_BATCH: BatchOptions = { flushAt: 10_000, flushAfterMs: 10_000 };
 const DEFAULT_RETRY = { retries: 2 };
 
 // Composition root: wires the production collaborators — the global fetch
-// (present in Node >=20 and browsers) and a TimerScheduler over the real
-// setTimeout — and sane default batching and retry policies, so callers don't
-// repeat that boilerplate. Callers override `batch`/`retry` for other
-// workloads; the scheduler and fetch are not configurable through this entry.
+// (present in Node >=20 and browsers), a TimerScheduler over the real
+// setTimeout, and the system clock that stamps event timestamps — plus sane
+// default batching and retry policies, so callers don't repeat that
+// boilerplate. Callers override `batch`/`retry` for other workloads; fetch,
+// scheduler, and clock are not configurable through this entry.
 export const createFlightRecorder = (
-  options: Omit<FlightRecorderOptions, 'scheduler' | 'fetch'>,
+  options: Omit<FlightRecorderOptions, 'scheduler' | 'fetch' | 'clock'>,
 ): FlightRecorder =>
   new FlightRecorder({
     batch: DEFAULT_BATCH,
@@ -38,4 +40,5 @@ export const createFlightRecorder = (
     ...options,
     fetch: globalThis.fetch,
     scheduler: new TimerScheduler(systemTimer),
+    clock: systemClock,
   });

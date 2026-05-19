@@ -4,7 +4,6 @@ import { semanticEventKey } from './semantic-event-key.js';
 
 const defaultImpression: ImpressionEvent = {
   eventType: 'isEnabled',
-  timestamp: '2026-01-01 00:00:00.000',
   context: {},
   enabled: true,
   featureName: 'demo.flag',
@@ -17,7 +16,6 @@ const makeImpression = (overrides: Partial<ImpressionEvent> = {}): ImpressionEve
 
 const defaultCustom: CustomEvent = {
   eventType: 'custom',
-  timestamp: '2026-01-01 00:00:00.000',
   context: {},
   eventName: 'signup',
 };
@@ -28,11 +26,8 @@ const makeCustom = (overrides: Partial<CustomEvent> = {}): CustomEvent => ({
 });
 
 describe('semanticEventKey', () => {
-  it('treats two evaluations of the same flag as duplicates despite different timestamps', () => {
-    const first = makeImpression({ timestamp: '2026-01-01 00:00:00.000' });
-    const second = makeImpression({ timestamp: '2026-12-31 23:59:59.999' });
-
-    expect(semanticEventKey(first)).toBe(semanticEventKey(second));
+  it('treats two evaluations of the same flag as duplicates', () => {
+    expect(semanticEventKey(makeImpression())).toBe(semanticEventKey(makeImpression()));
   });
 
   it('distinguishes evaluations of different variants of the same flag', () => {
@@ -70,11 +65,8 @@ describe('semanticEventKey', () => {
     expect(semanticEventKey(isEnabled)).not.toBe(semanticEventKey(getVariant));
   });
 
-  it('treats two identical custom events as duplicates despite different timestamps', () => {
-    const first = makeCustom({ timestamp: '2026-01-01 00:00:00.000' });
-    const second = makeCustom({ timestamp: '2026-12-31 23:59:59.999' });
-
-    expect(semanticEventKey(first)).toBe(semanticEventKey(second));
+  it('treats two identical custom events as duplicates', () => {
+    expect(semanticEventKey(makeCustom())).toBe(semanticEventKey(makeCustom()));
   });
 
   it('distinguishes custom events with different names', () => {

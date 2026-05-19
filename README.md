@@ -49,16 +49,51 @@ within a flush window are dropped. The recorder stamps each event with a
 are sent automatically per the batching policy below — `flush()` is available
 for a manual send.
 
-## Defaults
+## Configuration
 
+Beyond the required `url` and `clientKey`, `createFlightRecorder` accepts:
 
-| Option  | Default                                | Meaning                                                            |
-| ------- | -------------------------------------- | ------------------------------------------------------------------ |
-| `batch` | `{ flushAt: 10_000, flushAfterMs: 10_000 }` | Flush every 10s; force a flush if the buffer reaches 10k events. |
-| `retry` | `{ retries: 2 }`                       | Retry a failed POST twice with exponential backoff.                |
+**`batch`** — when to flush. Defaults to `{ flushAt: 10_000, flushAfterMs: 10_000 }`.
+Passing your own `batch` replaces the whole object, not individual fields.
+
+| Field          | Default  | Meaning                                                    |
+| -------------- | -------- | ---------------------------------------------------------- |
+| `flushAt`      | `10_000` | Flush once the buffer holds this many events.              |
+| `flushAfterMs` | `10_000` | Flush at least this often (ms), regardless of buffer size. |
+
+**`retry`** — `{ retries }`, default `{ retries: 2 }`. Retries a failed flush
+POST with exponential backoff.
+
+**`onError`** — failure callback; see [Error handling](#error-handling).
 
 A browser caller that bursts past ~180 events between flushes should lower
 `batch.flushAt` — a large keepalive flush on `close()` exceeds the 64 KB limit.
+
+## Error handling
+
+`record()` and `flush()` never throw — the recorder is best-effort, and a flush
+failure must not break the code path that produced the event. Failures are
+reported through the optional `onError` callback.
+
+It receives an `ErrorInfo` with `reason: 'persistentFailure'` when a flush POST
+fails after all retries and the batch is dropped — carrying `droppedEventCount`
+and the underlying `error`:
+
+```ts
+createFlightRecorder({
+  url: 'https://ingest.example.com/events',
+  clientKey: 'your-ingestion-token',
+  onError: (info) => {
+    if (info.reason === 'persistentFailure') {
+      console.warn(`flight recorder dropped ${info.droppedEventCount} events`, info.error);
+    }
+  },
+});
+```
+
+Dropped events are gone: the recorder does not retry beyond `retry.retries`, and
+the buffer does not survive a restart. Telemetry loss is acceptable by design;
+`onError` is for surfacing it to your metrics or logs, not for recovery.
 
 ## API
 
@@ -66,5 +101,4 @@ A browser caller that bursts past ~180 events between flushes should lower
 - `FlightRecorder.record(event)` — buffer an event
 - `FlightRecorder.flush()` — send the buffer now
 - `FlightRecorder.close()` — final flush, then stop accepting events
-- `onError(info)` — notified on `persistentFailure` (POST failed after retries)
-  or `queueFull` (buffer cap reached); both carry `droppedEventCount`
+- `onError(info)` — failure callback; see [Error handling](#error-handling)

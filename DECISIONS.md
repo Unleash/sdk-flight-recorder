@@ -213,3 +213,18 @@ The recorder ships heterogeneous batches — `ImpressionEvent` and `CustomEvent`
 *Why not stream the request body:* client-side request streaming would mean rearchitecting `toNdjson` from a `string`-returning function into a stream / async-iterable, changing `HttpClient.post`'s signature, and depending on browser `fetch` streaming-request-body support (needs HTTP/2 + `duplex: 'half'`, patchy across browsers). At realistic batch sizes a 10k-event flush is only ~3–4 MB — `fetch` handles a multi-MB string body trivially. Buffered keeps the transport simple at no measurable cost. If batches ever grow large enough that holding the whole string in memory hurts, revisit then.
 
 *Interaction with `keepalive`:* a buffered body is what makes the browser ~64 KB `keepalive` cap relevant on the `close()`/unload path — see the keepalive note in the buffer-cap decision. Streaming the body would not lift that cap; it applies to total keepalive request size, not to whether the body streams.
+
+## Dedup key built from identifying fields, not a `JSON.stringify` replacer
+
+`semanticEventKey` (`src/semantic-event-key.ts`) builds the dedup key by joining the event's identifying fields (`eventType`, `featureName`, `variant`, `enabled` for impressions; `'custom'`, `eventName`, `payload` for custom events) with `U+001F`, and calls `JSON.stringify` only on `context`/`payload`. It does **not** use `JSON.stringify(event, replacer)` with a function replacer. This supersedes the replacer implementation described in the "In-batch dedup via injected `dedupKey`" entry above — the `*Why a JSON.stringify replacer, not spread+delete*` reasoning there is now historical.
+
+*Why:* a *function* replacer disables V8's fast-path serializer and is invoked once per property of the entire event graph — every top-level field, every `context` key, every nested `properties` key. Building the key directly reads the scalar identifying fields with no serialization at all and runs `JSON.stringify` — on the fast path, no replacer — only on the open-ended `context`/`payload` subtrees.
+
+*Measured:* ~2× faster on the `EventBuffer.add` hot path. `npm run bench` (`src/event-buffer.bench.ts`) benchmarks both keys against each other — the old replacer key is kept there as a local `replacerSemanticEventKey` baseline so the speedup stays measurable. Controlled comparison (same workload, key implementation varied), single core, measured on an Apple Silicon Mac:
+
+| Workload (add 10k events + drain) | Replacer key | Field-list key | Speedup |
+|---|---|---|---|
+| 10k distinct events | ~0.72M events/sec | ~1.45M events/sec | 2.02× |
+| 10k events, 95% duplicates | ~0.80M events/sec | ~1.56M events/sec | 1.93× |
+
+Absolute throughput is machine-specific and will drift; the ~2× ratio is the durable claim — re-measure with `npm run bench`. *Scope:* this is the in-memory per-event CPU cost only; it does not change end-to-end recorder throughput, which is bounded by the HTTP flush.

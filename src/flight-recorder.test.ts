@@ -31,11 +31,15 @@ const snapshotRequest = async (req: Request): Promise<RequestSnapshot> => {
   };
 };
 
-const ndjsonToArray = (body: string): unknown[] =>
-  body
+const recordedEvents = async (snapshots: Array<Promise<RequestSnapshot>>): Promise<unknown[]> => {
+  const [snapshot, ...rest] = await Promise.all(snapshots);
+  if (!snapshot) throw new Error('expected exactly one request, got none');
+  if (rest.length > 0) throw new Error(`expected exactly one request, got ${snapshots.length}`);
+  return snapshot.body
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line));
+};
 
 const defaultUrl = 'https://example/events';
 const defaultFetch: typeof fetch = async () => new Response();
@@ -235,9 +239,8 @@ describe('FlightRecorder', () => {
     recorder.record(custom);
     await recorder.flush();
 
-    const [snapshot] = await Promise.all(snapshots);
-    const lines = ndjsonToArray(snapshot!.body);
-    expect(lines).toMatchObject([
+    const events = await recordedEvents(snapshots);
+    expect(events).toMatchObject([
       { eventType: 'isEnabled', featureName: 'feature-x' },
       {
         eventType: 'custom',
@@ -260,9 +263,8 @@ describe('FlightRecorder', () => {
     recorder.record(makeCustomEvent({ eventName: 'signup', payload: { plan: 'free' } }));
     await recorder.flush();
 
-    const [snapshot] = await Promise.all(snapshots);
-    const lines = ndjsonToArray(snapshot!.body);
-    expect(lines).toMatchObject([
+    const events = await recordedEvents(snapshots);
+    expect(events).toMatchObject([
       { eventName: 'signup', payload: { plan: 'pro' } },
       { eventName: 'signup', payload: { plan: 'free' } },
     ]);
@@ -282,9 +284,8 @@ describe('FlightRecorder', () => {
     recorder.record(makeCustomEvent({ eventName: 'signup', payload: { plan: 'pro' } }));
     await recorder.flush();
 
-    const [snapshot] = await Promise.all(snapshots);
-    const lines = ndjsonToArray(snapshot!.body);
-    expect(lines).toMatchObject([
+    const events = await recordedEvents(snapshots);
+    expect(events).toMatchObject([
       { eventType: 'isEnabled', featureName: 'demo.flag' },
       {
         eventType: 'custom',

@@ -2,9 +2,7 @@ import { createHttpClient, type HttpClient } from './http-client.js';
 import { EventBuffer } from './event-buffer.js';
 import type { Scheduler } from './scheduler.js';
 import { toNdjson } from './ndjson.js';
-
-const semanticEventKey = (event: ImpressionEvent | CustomEvent): string =>
-    JSON.stringify(event, (k, v) => (k === 'eventId' || k === 'timestamp' ? undefined : v));
+import { semanticEventKey } from './semantic-event-key.js';
 
 export type ImpressionEvent = {
     eventType: 'isEnabled' | 'getVariant';

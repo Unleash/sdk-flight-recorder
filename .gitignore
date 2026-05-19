@@ -2,3 +2,4 @@
 node_modules
 .stryker-tmp
 reports
+dist

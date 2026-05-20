@@ -66,7 +66,7 @@ The `persistentFailure` payload exposes `droppedEventCount: number`, not the ful
 
 ## Failed sends drop the batch — no re-queue into the buffer
 
-When `httpClient.post` rejects (network error, exhausted ky retries, etc.), the drained batch is **discarded**. `onError({ reason: 'persistentFailure', droppedEventCount, error })` fires so the integrator can observe the loss, but the events never re-enter `this.buffer`. Pinned by `'invokes onError when the transport fails'`.
+When `httpClient.post` rejects (network error, exhausted ky retries, etc.), the drained batch is **discarded**. `onError({ reason: 'persistentFailure', droppedEventCount, error })` fires so the integrator can observe the loss, but the events never re-enter `this.buffer`. Pinned by `'invokes onError when the transport fails'` (callback shape) and `'only events recorded after a failed flush reach the wire'` (no re-queue).
 
 *Why drop, not re-queue:*
 

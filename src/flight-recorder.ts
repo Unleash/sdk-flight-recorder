@@ -44,8 +44,8 @@ export type BatchOptions = {
    * dropping new events. Effective cap = `flushAt * maxBufferSizeMultiplier`; once reached,
    * the incoming event is dropped and `onError({ reason: 'queueFull', droppedEventCount: 1 })`
    * fires. Must be >= 1 (a smaller value would put the cap below the trigger, silently
-   * stalling the recorder). Defaults to 2x when
-   * omitted — protects against unbounded memory growth when sends are slow or failing.
+   * stalling the recorder). Defaults to 2x — one trigger-batch of headroom to absorb
+   * records that arrive during an in-flight POST.
    */
   maxBufferSizeMultiplier?: number;
   /**
@@ -80,6 +80,13 @@ export class FlightRecorder {
   private sending: Promise<void> | undefined;
 
   constructor(options: FlightRecorderOptions) {
+    if (options.batch.flushAt === undefined) {
+      throw new Error('batch.flushAt is required');
+    }
+    const multiplier = options.batch.maxBufferSizeMultiplier ?? DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER;
+    if (multiplier < 1) {
+      throw new Error('batch.maxBufferSizeMultiplier must be >= 1');
+    }
     this.httpClient = createHttpClient({
       url: options.url,
       headers: {
@@ -91,13 +98,6 @@ export class FlightRecorder {
     });
     this.scheduler = options.scheduler;
     this.clock = options.clock;
-    if (options.batch.flushAt === undefined) {
-      throw new Error('batch.flushAt is required');
-    }
-    const multiplier = options.batch.maxBufferSizeMultiplier ?? DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER;
-    if (multiplier < 1) {
-      throw new Error('batch.maxBufferSizeMultiplier must be >= 1');
-    }
     this.flushAt = options.batch.flushAt;
     this.buffer = new EventBuffer<StampedEvent>({
       maxSize: this.flushAt * multiplier,

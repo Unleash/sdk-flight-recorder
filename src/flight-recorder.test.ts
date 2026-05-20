@@ -349,6 +349,30 @@ describe('FlightRecorder', () => {
     ]);
   });
 
+  it('only events recorded after a failed flush reach the wire', async () => {
+    const snapshots: Array<Promise<RequestSnapshot>> = [];
+    let isFirstFetch = true;
+    const fakeFetch: typeof fetch = async (input) => {
+      if (isFirstFetch) {
+        isFirstFetch = false;
+        throw new TypeError('Failed to fetch');
+      }
+      snapshots.push(snapshotRequest(input as Request));
+      return new Response();
+    };
+    const recorder = createRecorder({ fetch: fakeFetch });
+    const failed = makeImpressionEvent({ featureName: 'failed' });
+    const next = makeImpressionEvent({ featureName: 'next' });
+
+    recorder.record(failed);
+    await recorder.flush();
+    recorder.record(next);
+    await recorder.flush();
+
+    const events = await recordedEvents(snapshots);
+    expect(events).toMatchObject([{ featureName: 'next' }]);
+  });
+
   it('ignores record and flush calls after close', async () => {
     let fetchCalls = 0;
     const fakeFetch: typeof fetch = async () => {

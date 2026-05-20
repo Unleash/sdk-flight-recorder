@@ -33,9 +33,9 @@ Last updated: 2026-05-20 (one POST in flight at a time via `this.sending` gate; 
 `src/ndjson.ts`
 - `toNdjson(items: ReadonlyArray<unknown>): string` — generic NDJSON serializer. One JSON object per line, trailing `\n`. Returns `''` for empty input (the recorder's `flush` already guards against calling it that way, but the function handles it safely).
 
-## Tests (36 passing)
+## Tests (37 passing)
 
-`src/flight-recorder.test.ts` (15 tests — no ky backoff at this seam)
+`src/flight-recorder.test.ts` (16 tests — no ky backoff at this seam)
 - `'throws when batch.flushAt is not provided'` — runtime guard for JS callers; type already requires it.
 - `'throws when batch.maxBufferSizeMultiplier is less than 1'` — runtime guard; types can't constrain `number >= 1`.
 - `'can flush with no events'` — empty-buffer guard.
@@ -48,6 +48,7 @@ Last updated: 2026-05-20 (one POST in flight at a time via `this.sending` gate; 
 - `'sends custom events with the same eventName but different payloads separately'` — dedup distinguishes by `eventName` + `payload`.
 - `'duplicate events recorded within one flush window reach the wire only once'` — both impressions and custom events.
 - `'invokes onError when the transport fails'` — `retry: { retries: 0 }`, asserts persistentFailure shape.
+- `'only events recorded after a failed flush reach the wire'` — pins drop-no-requeue: fetch fails on the first POST, succeeds on the second; later flush ships only the post-failure event.
 - `'ignores record and flush calls after close'` — neither path hits the network after `close()`.
 - `'sends remaining events with keepalive on close'` — `close()` flushes pending with `keepalive: true`.
 - `'flushes pending events and stops the periodic flush on close'` — `close()` flushes pending + transitions scheduler to `'stopped'`.

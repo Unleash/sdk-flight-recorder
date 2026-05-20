@@ -1,8 +1,9 @@
 import type { Clock } from './clock.js';
-import type { EventBuffer } from './event-buffer.js';
+import { EventBuffer } from './event-buffer.js';
 import type { HttpClient } from './http-client.js';
 import { toNdjson } from './ndjson.js';
 import type { Scheduler } from './scheduler.js';
+import { semanticEventKey } from './semantic-event-key.js';
 
 export type ImpressionEvent = {
   eventType: 'isEnabled' | 'getVariant';
@@ -31,6 +32,9 @@ export type ErrorInfo =
 type RecorderStatus = 'open' | 'closed';
 
 export const DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER = 2;
+
+export const createRecorderBuffer = (options: { maxSize: number }): EventBuffer<StampedEvent> =>
+  new EventBuffer<StampedEvent>({ maxSize: options.maxSize, dedupKey: semanticEventKey });
 
 export type BatchOptions = {
   /**

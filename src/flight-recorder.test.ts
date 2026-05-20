@@ -53,6 +53,9 @@ const defaultBatch: BatchOptions = { flushAt: 100 };
 
 type RecorderOverrides = Partial<FlightRecorderOptions>;
 
+// retries: 0 so an injected `throw` in a fake fetch is observable on the
+// first call — the production default (2) would otherwise retry past the
+// failure into a successful second response.
 const createRecorder = (overrides: RecorderOverrides = {}) =>
   createFlightRecorder({
     url: defaultUrl,

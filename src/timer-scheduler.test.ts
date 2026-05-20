@@ -1,14 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { createGate } from './test-gate.js';
 import { ControllableTimer } from './timer.js';
 import { TimerScheduler } from './timer-scheduler.js';
-
-const createGate = () => {
-  let open!: () => void;
-  const opened = new Promise<void>((resolve) => {
-    open = resolve;
-  });
-  return { open, opened };
-};
 
 describe('TimerScheduler', () => {
   it('runs the handler on every interval tick', async () => {

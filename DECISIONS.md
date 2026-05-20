@@ -64,6 +64,20 @@ The only retry knob is `retry: { retries: number }` (opt-in; default 0 = no retr
 
 The `persistentFailure` payload exposes `droppedEventCount: number`, not the full `events: Event[]` array (which the reference design includes). *Why:* the buffer can hold thousands of events; passing them to a user-supplied callback retains the whole batch in memory until the callback returns and risks long-lived references in observability code. A count is enough for the dominant use case (metrics, alerting). Callers who need event-level forensics can capture the events themselves via a custom `fetch` wrapper that logs request bodies — that's the right seam.
 
+## Failed sends drop the batch — no re-queue into the buffer
+
+When `httpClient.post` rejects (network error, exhausted ky retries, etc.), the drained batch is **discarded**. `onError({ reason: 'persistentFailure', droppedEventCount, error })` fires so the integrator can observe the loss, but the events never re-enter `this.buffer`. Pinned by `'invokes onError when the transport fails'` (callback shape) and `'only events recorded after a failed flush reach the wire'` (no re-queue).
+
+*Why drop, not re-queue:*
+
+- **Ordering** — `record()` calls during the in-flight POST already filled the buffer with newer events. Prepending the failed batch reverses chronological order on the wire; appending mixes failed + new mid-stream. Either choice surprises the integrator. Just drop.
+- **Amplification** — if the server is failing because of overload, re-queueing the batch puts it right back in line to be sent again, doubling load when the server can least handle it. ky already retries with exponential backoff and Retry-After; only persistent failure reaches this catch.
+- **Bounded memory** — re-add must respect `maxBufferSize` (cap = `flushAt × multiplier`). A failed batch the size of `flushAt` re-queued into a buffer that already grew during the failed send would push past the cap and trip `queueFull` on the re-added events — same drop, different reason code, more code to get there.
+- **Dedup window already cleared** — `drain()` clears the seen set atomically. Re-adding bypasses dedup against any new arrivals; preserving dedup would require carrying the keys through the failed send, which couples the buffer's invariant to the transport's retry policy.
+- **Scope** — these are observability signals (impressions, custom events), not transactional records. Acceptable loss profile.
+
+*If guaranteed delivery is later wanted:* the right seam is a custom `fetch` wrapper that persists request bodies to disk (or to another transport) before forwarding — same pattern as event-forensics in the "droppedEventCount, not the events" decision above. The recorder stays simple; durability is a separable concern.
+
 ## HTTP transport extracted to `src/http-client.ts`
 
 `createHttpClient({ url, headers, fetch, retries }): HttpClient` lives in its own module; `HttpClient` exposes a single `post(body: string): Promise<void>`. `FlightRecorder` no longer touches `ky` directly — it builds the client once in its constructor and calls `httpClient.post(body)` from `flush()`. *Why:* the recorder's job is buffering, serialization, and observability; the HTTP transport (ky config, retry knobs, header set, fetch DI) is a separable concern. Bonus: the ky instance is built once at construction instead of being re-created on every `flush()`. The recorder's public options (`url`, `clientKey`, `fetch`, `retry`) are unchanged — the recorder still owns the option surface; only the *internal* coupling to ky moved.
@@ -85,7 +99,17 @@ In a production scheduler this maps to self-chained `setTimeout`: `setTimeout(()
 
 `ControllableTimer.advance(ms)` is async and awaits the handler between ticks — so tests can `await timer.advance(2000)` and skip the trailing `await yieldEventLoop()` they used to need.
 
-*Why this works (and why we chose it):* this is the pattern Unleash's own Node SDK (`unleash-client-node`) uses for its metrics flushing — chained `setTimeout` with `await` between ticks, no explicit mutex. The pattern is production-proven there. It addresses the most common "in-flight at shutdown" case (a periodic that's mid-HTTP when something else triggers close) without adding in-flight promise tracking to the recorder. The size-trigger path (`void this.flush()` inside `record`) and any manual `flush()` calls can still race — same trade-off the Unleash SDK makes.
+*Why this works (and why we chose it):* this is the pattern Unleash's own Node SDK (`unleash-client-node`) uses for its metrics flushing — chained `setTimeout` with `await` between ticks, no explicit mutex. The pattern is production-proven there. It addresses the most common "in-flight at shutdown" case (a periodic that's mid-HTTP when something else triggers close). The size-trigger path (`void this.flush()` inside `record`) and any manual `flush()` calls used to also race; that's now closed by the `this.sending` gate (see next entry).
+
+## At most one POST in flight via a `this.sending` gate in `flush()`
+
+`FlightRecorder` holds `private sending: Promise<void> | undefined`. `flush()` opens with `if (this.sending) await this.sending;`, drains the whole buffer atomically, and stores the in-flight send in `this.sending` (cleared via `.finally`, so a rejected fetch doesn't strand the gate). The send itself is a small private `send(toSend, options)` method — keeps `flush()` to the gate/drain shape. Covers manual, periodic, and size-trigger callers uniformly because they all funnel through `flush()`.
+
+*Why `if`, not `while`:* the drain is atomic and empties the buffer. Any caller waiting on `this.sending` wakes to an empty buffer (or only what `record()` added during the send) — the `if (this.buffer.size === 0) return;` guard handles the empty case, and the single sender pattern means no two callers race on a partial drain.
+
+*Why one drain per send (no per-POST cap):* an earlier version capped each POST at `flushAt` events so a slow send + record burst couldn't ship one huge body. That cost a `while`-loop gate (multiple waiters racing on residuals), a parallel `keys: string[]` in `EventBuffer`, and partial-drain seen-key bookkeeping. `maxBufferSize` already bounds the buffer (and therefore the worst-case POST body); the cap was a second line of defense paying real complexity for a marginal benefit at dogfooding scope. Dropped.
+
+*Why one in flight at all:* parallel POSTs may arrive out of order and offer no backpressure when the server is slow. One in flight ⇒ slow send grows the buffer ⇒ `maxBufferSize` trips `queueFull`. Each `flush()` ships at most one batch and resolves after either its POST completes or it observes an empty buffer (someone else drained). `close()` + keepalive caveat: a size-trigger firing in the close window may ship without keepalive — concurrent record during close is already user error.
 
 ## `Scheduler.stop()` is async and awaits the in-flight handler
 
@@ -166,15 +190,27 @@ The reference design's envelope (`schemaVersion`, `source`, `appName`, `environm
 
 *Why dedup before the buffer cap check:* a duplicate that would exceed the cap shouldn't fire `onError({ reason: 'queueFull' })` — it's not a capacity problem, it's a repeat. Checking `seen` first keeps cap errors meaningful.
 
-## Buffer cap drops new events; `queueFull` joins the `ErrorInfo` union
+## Buffer cap is a multiplier of `flushAt`, not an absolute number
 
-`batch.maxBufferSize` is an opt-in ceiling on `record()`. When the buffer is already at capacity, the incoming event is dropped (not the oldest) and `onError({ reason: 'queueFull', droppedEventCount: 1 })` is fired. `ErrorInfo` is now a discriminated union: `'persistentFailure'` carries `error: unknown`; `'queueFull'` does not.
+`BatchOptions` requires `flushAt: number` and accepts an optional `maxBufferSizeMultiplier?: number` (default `DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER` = 2, exported from `src/flight-recorder.ts`). Effective cap = `flushAt × multiplier`; when `record()` is called with the buffer at that cap, the incoming event is dropped and `onError({ reason: 'queueFull', droppedEventCount: 1 })` fires. `ErrorInfo` is a discriminated union — `'persistentFailure'` carries `error: unknown`, `'queueFull'` does not.
 
-*Why drop new instead of oldest:* oldest events are closest to being shipped on the next flush; dropping them would throw away work that's already been buffered. Dropping new events also keeps the implementation O(1) — no splice needed.
+*Why a multiplier, not an absolute cap:* the relationship between trigger and cap is what matters for safety. A multiplier expresses that relationship directly: "1× = cap at the trigger, 2× = one trigger-batch of headroom, 5× = generous slack." An absolute number opens the door to inversions (cap < trigger) and forces the integrator to reason about two unrelated numbers; the multiplier collapses that into one ratio. The library validates `multiplier >= 1` so the cap can never be below the trigger.
+
+*Why `flushAt` is required but the multiplier isn't:* the multiplier needs a base to multiply, so `flushAt` is the load-bearing required value (and mandating it also kills the no-trigger-no-cap mode that used to be expressible). The multiplier itself has a safe, opinionated default — 2× covers the realistic burst-during-in-flight-POST case — so it is optional. Callers naming a different ratio is a deliberate budget choice, not a configuration burden.
+
+*Why default `2`, not `1` or `5`:* with the atomic drain, multiplier `1` only drops when records arrive during an in-flight POST; that's the dominant case we want to absorb. `2×` gives one full trigger-batch of headroom without bloating memory. `5–10×` is a budget choice for the integrator (~17–35 MB at 350 B/event with `flushAt = 10_000`), not a library default. The number lives in `DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER` so callers can read it programmatically.
+
+*Why `multiplier >= 1`, not `> 1`:* multiplier `= 1` is legitimate when the integrator wants a tight cap (cap == trigger). Some integrators (constrained memory, latency-tolerant) want exactly that.
+
+*Why drop new instead of oldest:* oldest events are closest to being shipped on the next flush; dropping them would throw away work that's already been buffered. Dropping new is also O(1) — no splice needed.
 
 *Why `droppedEventCount: 1` per call:* each `record()` call is one event; batching the count across multiple drops would require extra state and makes the callback harder to reason about. Callers who want a running total can accumulate in their `onError` handler.
 
-*Browser keepalive constraint:* at ~300–400 bytes per event, 64 KB fits roughly 150–200 events. `maxBufferSize` should be set well below that for browser callers using `close()` on unload.
+*Browser keepalive constraint:* at ~300–400 bytes per event, 64 KB fits roughly 150–200 events. The integrator should keep `flushAt × multiplier` well below that for browser callers using `close()` on unload.
+
+*Composition root:* `createFlightRecorder` (`src/index.ts`) wires `DEFAULT_BATCH = { flushAt: 10_000, flushAfterMs: 10_000 }`. Multiplier is intentionally omitted — the library-side default is the single source of truth, so the effective cap is `10_000 × 2 = 20_000` events (~7 MB at 350 B/event). Partial `batch` from the caller merges with the default (`{ ...DEFAULT_BATCH, ...options.batch }`) so callers can tweak one field without re-specifying the others.
+
+*What used to live here:* an earlier design used `maxBufferSize: number` (absolute, optional), then `maxBufferSize: number` (required) with a `maxBufferSize >= flushAt` validation. Both leaked the cap-vs-trigger relationship to the caller as two free numbers and a constraint. The multiplier expresses the constraint in the type, so the "throws when maxBufferSize is less than flushAt" runtime check (and its test) became unnecessary — that inversion is now unrepresentable.
 
 ## `EventBuffer<T>` extracted from `FlightRecorder`
 

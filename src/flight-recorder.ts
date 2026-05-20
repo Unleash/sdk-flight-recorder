@@ -31,15 +31,30 @@ export type ErrorInfo =
 
 type RecorderStatus = 'open' | 'closed';
 
-/**
- * Options for batching events. If `flushAt` is set, the recorder will flush when the buffer reaches that size.
- * If `flushAfterMs` is set, the recorder will flush after that amount of time has passed since the last flush.
- * If `maxBufferSize` is set, the recorder will drop new events and call `onError` when the buffer reaches that size.
- * `maxBufferSize` requires `flushAt` to be set.
- */
-export type BatchOptions =
-  | { flushAt: number; flushAfterMs?: number; maxBufferSize?: number }
-  | { flushAt?: number; flushAfterMs?: number; maxBufferSize?: never };
+export const DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER = 2;
+
+export type BatchOptions = {
+  /**
+   * When the buffer reaches this many events, `record()` synchronously triggers a flush
+   * (size-based auto-flush). Required — also serves as the base for `maxBufferSizeMultiplier`.
+   */
+  flushAt: number;
+  /**
+   * How many `flushAt`-worth of events the buffer can hold before `record()` starts
+   * dropping new events. Effective cap = `flushAt * maxBufferSizeMultiplier`; once reached,
+   * the incoming event is dropped and `onError({ reason: 'queueFull', droppedEventCount: 1 })`
+   * fires. Must be >= 1 (a smaller value would put the cap below the trigger, silently
+   * stalling the recorder). Defaults to 2x — one trigger-batch of headroom to absorb
+   * records that arrive during an in-flight POST.
+   */
+  maxBufferSizeMultiplier?: number;
+  /**
+   * Periodic flush interval in milliseconds. The scheduler runs a flush every this-many
+   * ms (time-based auto-flush). If omitted, flushes happen only on `flushAt` thresholds
+   * or explicit `flush()` calls.
+   */
+  flushAfterMs?: number;
+};
 
 export type FlightRecorderOptions = {
   url: string;
@@ -47,7 +62,7 @@ export type FlightRecorderOptions = {
   fetch: typeof fetch;
   scheduler: Scheduler;
   clock: Clock;
-  batch?: BatchOptions;
+  batch: BatchOptions;
   retry?: {
     retries: number;
   };
@@ -58,12 +73,20 @@ export class FlightRecorder {
   private readonly httpClient: HttpClient;
   private readonly scheduler: Scheduler;
   private readonly clock: Clock;
-  private readonly flushAt: number | undefined;
+  private readonly flushAt: number;
   private readonly onError: ((info: ErrorInfo) => void) | undefined;
   private readonly buffer: EventBuffer<StampedEvent>;
   private status: RecorderStatus = 'open';
+  private sending: Promise<void> | undefined;
 
   constructor(options: FlightRecorderOptions) {
+    if (options.batch.flushAt === undefined) {
+      throw new Error('batch.flushAt is required');
+    }
+    const multiplier = options.batch.maxBufferSizeMultiplier ?? DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER;
+    if (multiplier < 1) {
+      throw new Error('batch.maxBufferSizeMultiplier must be >= 1');
+    }
     this.httpClient = createHttpClient({
       url: options.url,
       headers: {
@@ -75,17 +98,13 @@ export class FlightRecorder {
     });
     this.scheduler = options.scheduler;
     this.clock = options.clock;
-    this.flushAt = options.batch?.flushAt;
-    const maxBufferSize = options.batch?.maxBufferSize;
-    if (maxBufferSize !== undefined && this.flushAt === undefined) {
-      throw new Error('batch.flushAt is required when batch.maxBufferSize is set');
-    }
+    this.flushAt = options.batch.flushAt;
     this.buffer = new EventBuffer<StampedEvent>({
-      maxSize: maxBufferSize,
+      maxSize: this.flushAt * multiplier,
       dedupKey: semanticEventKey,
     });
     this.onError = options.onError;
-    const flushAfterMs = options.batch?.flushAfterMs;
+    const flushAfterMs = options.batch.flushAfterMs;
     if (flushAfterMs !== undefined) {
       this.scheduler.runEvery(flushAfterMs, () => this.flush());
     }
@@ -99,18 +118,25 @@ export class FlightRecorder {
       this.onError?.({ reason: 'queueFull', droppedEventCount: 1 });
       return;
     }
-    if (this.flushAt !== undefined && this.buffer.size >= this.flushAt) {
+    if (this.buffer.size >= this.flushAt) {
       void this.flush();
     }
   }
 
   async flush(options?: { keepalive?: boolean }): Promise<void> {
     if (this.status === 'closed') return;
+    if (this.sending) await this.sending;
     if (this.buffer.size === 0) return;
     const toSend = this.buffer.drain();
-    const body = toNdjson(toSend);
+    this.sending = this.send(toSend, options).finally(() => {
+      this.sending = undefined;
+    });
+    await this.sending;
+  }
+
+  private async send(toSend: StampedEvent[], options?: { keepalive?: boolean }): Promise<void> {
     try {
-      await this.httpClient.post(body, { keepalive: options?.keepalive });
+      await this.httpClient.post(toNdjson(toSend), { keepalive: options?.keepalive });
     } catch (err) {
       this.onError?.({
         reason: 'persistentFailure',

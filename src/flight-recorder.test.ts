@@ -2,6 +2,7 @@ import { NetworkError } from 'ky';
 import { describe, expect, it } from 'vitest';
 import type { Clock } from './clock.js';
 import {
+  type BatchOptions,
   type CustomEvent,
   type ErrorInfo,
   FlightRecorder,
@@ -9,6 +10,7 @@ import {
   type ImpressionEvent,
 } from './flight-recorder.js';
 import type { Scheduler } from './scheduler.js';
+import { createGate, createGatedFetch } from './test-utils.js';
 import { ControllableTimer } from './timer.js';
 import { TimerScheduler } from './timer-scheduler.js';
 
@@ -31,14 +33,17 @@ const snapshotRequest = async (req: Request): Promise<RequestSnapshot> => {
   };
 };
 
+const ndjsonToArray = (body: string): unknown[] =>
+  body
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+
 const recordedEvents = async (snapshots: Array<Promise<RequestSnapshot>>): Promise<unknown[]> => {
   const [snapshot, ...rest] = await Promise.all(snapshots);
   if (!snapshot) throw new Error('expected exactly one request, got none');
   if (rest.length > 0) throw new Error(`expected exactly one request, got ${snapshots.length}`);
-  return snapshot.body
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line));
+  return ndjsonToArray(snapshot.body);
 };
 
 const defaultUrl = 'https://example/events';
@@ -50,8 +55,13 @@ const defaultScheduler: Scheduler = {
   getStatus: () => 'stopped',
 };
 const defaultClock: Clock = { now: () => '2026-01-01T00:00:00.000Z' };
+const defaultBatch: BatchOptions = { flushAt: 100 };
 
-const createRecorder = (overrides: Partial<FlightRecorderOptions> = {}) =>
+type RecorderOverrides = Partial<Omit<FlightRecorderOptions, 'batch'>> & {
+  batch?: Partial<BatchOptions>;
+};
+
+const createRecorder = (overrides: RecorderOverrides = {}) =>
   new FlightRecorder({
     url: defaultUrl,
     fetch: defaultFetch,
@@ -59,6 +69,7 @@ const createRecorder = (overrides: Partial<FlightRecorderOptions> = {}) =>
     scheduler: defaultScheduler,
     clock: defaultClock,
     ...overrides,
+    batch: { ...defaultBatch, ...overrides.batch },
   });
 
 const makeImpressionEvent = (overrides: Partial<ImpressionEvent> = {}): ImpressionEvent => ({
@@ -77,13 +88,25 @@ const makeCustomEvent = (overrides: Partial<CustomEvent> = {}): CustomEvent => (
 });
 
 describe('FlightRecorder', () => {
-  it('throws when maxBufferSize is set without flushAt', () => {
-    expect(() =>
-      createRecorder({
-        // @ts-expect-error -- intentionally bypassing type guard to verify runtime check
-        batch: { maxBufferSize: 100 },
-      }),
-    ).toThrow('batch.flushAt is required when batch.maxBufferSize is set');
+  it('throws when batch.flushAt is not provided', () => {
+    expect(
+      () =>
+        new FlightRecorder({
+          url: defaultUrl,
+          fetch: defaultFetch,
+          clientKey: defaultClientKey,
+          scheduler: defaultScheduler,
+          clock: defaultClock,
+          // @ts-expect-error -- intentionally bypassing type guard to verify runtime check
+          batch: { maxBufferSizeMultiplier: 2 },
+        }),
+    ).toThrow('batch.flushAt is required');
+  });
+
+  it('throws when batch.maxBufferSizeMultiplier is less than 1', () => {
+    expect(() => createRecorder({ batch: { flushAt: 100, maxBufferSizeMultiplier: 0.5 } })).toThrow(
+      'batch.maxBufferSizeMultiplier must be >= 1',
+    );
   });
 
   it('can flush with no events', async () => {
@@ -123,38 +146,6 @@ describe('FlightRecorder', () => {
         },
         body: `${JSON.stringify({ ...event, timestamp: defaultClock.now() })}\n`,
       },
-    ]);
-  });
-
-  it('an event recorded mid-flush is sent on the next flush', async () => {
-    const snapshots: Array<Promise<RequestSnapshot>> = [];
-    let releaseFirstFetch!: () => void;
-    const firstFetchInFlight = new Promise<void>((resolve) => {
-      releaseFirstFetch = resolve;
-    });
-    let isFirstFetch = true;
-    const fakeFetch: typeof fetch = async (input) => {
-      snapshots.push(snapshotRequest(input as Request));
-      if (isFirstFetch) {
-        isFirstFetch = false;
-        await firstFetchInFlight;
-      }
-      return new Response();
-    };
-    const recorder = createRecorder({ fetch: fakeFetch });
-    const before = makeImpressionEvent({ featureName: 'before' });
-    const during = makeImpressionEvent({ featureName: 'during' });
-
-    recorder.record(before);
-    const flushInFlight = recorder.flush();
-    recorder.record(during);
-    releaseFirstFetch();
-    await flushInFlight;
-    await recorder.flush();
-
-    expect(await Promise.all(snapshots)).toMatchObject([
-      { body: `${JSON.stringify({ ...before, timestamp: defaultClock.now() })}\n` },
-      { body: `${JSON.stringify({ ...during, timestamp: defaultClock.now() })}\n` },
     ]);
   });
 
@@ -198,18 +189,65 @@ describe('FlightRecorder', () => {
     expect(fetchCalls).toBe(1);
   });
 
-  it('a full buffer drops the event and reports queueFull through onError', () => {
+  it('a full buffer drops the event and reports queueFull through onError', async () => {
+    const fetchGate = createGatedFetch();
     const errors: ErrorInfo[] = [];
     const recorder = createRecorder({
-      batch: { flushAt: 5, maxBufferSize: 2 },
+      fetch: fetchGate,
+      batch: { flushAt: 2 },
       onError: (info) => errors.push(info),
     });
 
-    recorder.record(makeImpressionEvent({ featureName: 'flag-1' }));
-    recorder.record(makeImpressionEvent({ featureName: 'flag-2' }));
-    recorder.record(makeImpressionEvent({ featureName: 'flag-3' }));
+    // flushAt 2 + default multiplier 2 = cap 4. #1-2 trigger a flush that
+    // drains synchronously into the gated POST; #3,4,5,6 refill the buffer to the
+    // cap of 4; #7 overflows.
+    for (let i = 1; i <= 7; i++) {
+      recorder.record(makeImpressionEvent({ featureName: `flag-${i}` }));
+    }
 
     expect(errors).toMatchObject([{ reason: 'queueFull', droppedEventCount: 1 }]);
+
+    // Release the held POST so close() can flush the residual and return.
+    fetchGate.release();
+    await recorder.close();
+  });
+
+  it('concurrent flushes ship events sequentially in record order', async () => {
+    const firstFetchGate = createGate();
+    const snapshots: Array<Promise<RequestSnapshot>> = [];
+    let concurrent = 0;
+    let maxConcurrent = 0;
+    let isFirstFetch = true;
+    const fakeFetch: typeof fetch = async (input) => {
+      concurrent++;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+      snapshots.push(snapshotRequest(input as Request));
+      try {
+        if (isFirstFetch) {
+          isFirstFetch = false;
+          await firstFetchGate.opened;
+        }
+        return new Response();
+      } finally {
+        concurrent--;
+      }
+    };
+    const recorder = createRecorder({ fetch: fakeFetch });
+    const before = makeImpressionEvent({ featureName: 'before' });
+    const during = makeImpressionEvent({ featureName: 'during' });
+
+    recorder.record(before);
+    const flush1 = recorder.flush();
+    recorder.record(during);
+    const flush2 = recorder.flush();
+    firstFetchGate.open();
+    await Promise.all([flush1, flush2]);
+
+    expect(maxConcurrent).toBe(1);
+    expect(await Promise.all(snapshots)).toMatchObject([
+      { body: `${JSON.stringify({ ...before, timestamp: defaultClock.now() })}\n` },
+      { body: `${JSON.stringify({ ...during, timestamp: defaultClock.now() })}\n` },
+    ]);
   });
 
   it('ships both impression and custom events in one batch', async () => {

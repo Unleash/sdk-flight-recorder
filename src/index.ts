@@ -18,7 +18,13 @@ export type {
 // events/s), where it caps memory at ~3.5 MB/batch over a normal fetch. A
 // browser caller that bursts past ~180 events between flushes should override
 // `batch` — a 10k keepalive flush on close() exceeds the 64 KB browser limit.
-const DEFAULT_BATCH: BatchOptions = { flushAt: 10_000, flushAfterMs: 10_000 };
+// `maxBufferSizeMultiplier` is left implicit so the library-side default
+// (`DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER` = 2) is the single source of truth —
+// effective cap is 2 × flushAt = 20k events (~7 MB at 350 bytes/event).
+const DEFAULT_BATCH: BatchOptions = {
+  flushAt: 10_000,
+  flushAfterMs: 10_000,
+};
 
 // Two retries — ky's own default. ky retries the POST on transient failures
 // (network errors, 429, 5xx) with exponential backoff and honours Retry-After,
@@ -30,14 +36,18 @@ const DEFAULT_RETRY = { retries: 2 };
 // setTimeout, and the system clock that stamps event timestamps — plus sane
 // default batching and retry policies, so callers don't repeat that
 // boilerplate. Callers override `batch`/`retry` for other workloads; fetch,
-// scheduler, and clock are not configurable through this entry.
+// scheduler, and clock are not configurable through this entry. A partial
+// `batch` is merged with the default — callers can tweak one field without
+// re-specifying `maxBufferSize`.
 export const createFlightRecorder = (
-  options: Omit<FlightRecorderOptions, 'scheduler' | 'fetch' | 'clock'>,
+  options: Omit<FlightRecorderOptions, 'scheduler' | 'fetch' | 'clock' | 'batch'> & {
+    batch?: Partial<BatchOptions>;
+  },
 ): FlightRecorder =>
   new FlightRecorder({
-    batch: DEFAULT_BATCH,
     retry: DEFAULT_RETRY,
     ...options,
+    batch: { ...DEFAULT_BATCH, ...options.batch },
     fetch: globalThis.fetch,
     scheduler: new TimerScheduler(systemTimer),
     clock: systemClock,

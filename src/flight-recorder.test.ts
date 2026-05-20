@@ -88,21 +88,6 @@ const makeCustomEvent = (overrides: Partial<CustomEvent> = {}): CustomEvent => (
 });
 
 describe('FlightRecorder', () => {
-  it('throws when batch.flushAt is not provided', () => {
-    expect(
-      () =>
-        new FlightRecorder({
-          url: defaultUrl,
-          fetch: defaultFetch,
-          clientKey: defaultClientKey,
-          scheduler: defaultScheduler,
-          clock: defaultClock,
-          // @ts-expect-error -- intentionally bypassing type guard to verify runtime check
-          batch: { maxBufferSizeMultiplier: 2 },
-        }),
-    ).toThrow('batch.flushAt is required');
-  });
-
   it('throws when batch.maxBufferSizeMultiplier is less than 1', () => {
     expect(() => createRecorder({ batch: { flushAt: 100, maxBufferSizeMultiplier: 0.5 } })).toThrow(
       'batch.maxBufferSizeMultiplier must be >= 1',

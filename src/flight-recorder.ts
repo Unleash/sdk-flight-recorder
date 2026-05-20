@@ -1,9 +1,8 @@
 import type { Clock } from './clock.js';
-import { EventBuffer } from './event-buffer.js';
-import { createHttpClient, type HttpClient } from './http-client.js';
+import type { EventBuffer } from './event-buffer.js';
+import type { HttpClient } from './http-client.js';
 import { toNdjson } from './ndjson.js';
 import type { Scheduler } from './scheduler.js';
-import { semanticEventKey } from './semantic-event-key.js';
 
 export type ImpressionEvent = {
   eventType: 'isEnabled' | 'getVariant';
@@ -23,7 +22,7 @@ export type CustomEvent = {
 
 // What the buffer holds and the wire carries: a recorded event plus the
 // `timestamp` that `record()` stamps on it.
-type StampedEvent = (ImpressionEvent | CustomEvent) & { timestamp: string };
+export type StampedEvent = (ImpressionEvent | CustomEvent) & { timestamp: string };
 
 export type ErrorInfo =
   | { reason: 'persistentFailure'; droppedEventCount: number; error: unknown }
@@ -56,16 +55,13 @@ export type BatchOptions = {
   flushAfterMs?: number;
 };
 
-export type FlightRecorderOptions = {
-  url: string;
-  clientKey: string;
-  fetch: typeof fetch;
+export type FlightRecorderDeps = {
+  httpClient: HttpClient;
+  buffer: EventBuffer<StampedEvent>;
   scheduler: Scheduler;
   clock: Clock;
-  batch: BatchOptions;
-  retry?: {
-    retries: number;
-  };
+  flushAt: number;
+  flushAfterMs?: number;
   onError?: (info: ErrorInfo) => void;
 };
 
@@ -79,34 +75,15 @@ export class FlightRecorder {
   private status: RecorderStatus = 'open';
   private sending: Promise<void> | undefined;
 
-  constructor(options: FlightRecorderOptions) {
-    if (options.batch.flushAt === undefined) {
-      throw new Error('batch.flushAt is required');
-    }
-    const multiplier = options.batch.maxBufferSizeMultiplier ?? DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER;
-    if (multiplier < 1) {
-      throw new Error('batch.maxBufferSizeMultiplier must be >= 1');
-    }
-    this.httpClient = createHttpClient({
-      url: options.url,
-      headers: {
-        'content-type': 'application/ndjson',
-        authorization: options.clientKey,
-      },
-      fetch: options.fetch,
-      retries: options.retry?.retries ?? 0,
-    });
-    this.scheduler = options.scheduler;
-    this.clock = options.clock;
-    this.flushAt = options.batch.flushAt;
-    this.buffer = new EventBuffer<StampedEvent>({
-      maxSize: this.flushAt * multiplier,
-      dedupKey: semanticEventKey,
-    });
-    this.onError = options.onError;
-    const flushAfterMs = options.batch.flushAfterMs;
-    if (flushAfterMs !== undefined) {
-      this.scheduler.runEvery(flushAfterMs, () => this.flush());
+  constructor(deps: FlightRecorderDeps) {
+    this.httpClient = deps.httpClient;
+    this.scheduler = deps.scheduler;
+    this.clock = deps.clock;
+    this.flushAt = deps.flushAt;
+    this.buffer = deps.buffer;
+    this.onError = deps.onError;
+    if (deps.flushAfterMs !== undefined) {
+      this.scheduler.runEvery(deps.flushAfterMs, () => this.flush());
     }
   }
 

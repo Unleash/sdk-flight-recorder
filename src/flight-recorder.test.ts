@@ -1,14 +1,8 @@
 import { NetworkError } from 'ky';
 import { describe, expect, it } from 'vitest';
 import type { Clock } from './clock.js';
-import {
-  type BatchOptions,
-  type CustomEvent,
-  type ErrorInfo,
-  FlightRecorder,
-  type FlightRecorderOptions,
-  type ImpressionEvent,
-} from './flight-recorder.js';
+import type { BatchOptions, CustomEvent, ErrorInfo, ImpressionEvent } from './flight-recorder.js';
+import { createFlightRecorder, type FlightRecorderOptions } from './index.js';
 import type { Scheduler } from './scheduler.js';
 import { createGate, createGatedFetch } from './test-gate.js';
 import { ControllableTimer } from './timer.js';
@@ -57,17 +51,16 @@ const defaultScheduler: Scheduler = {
 const defaultClock: Clock = { now: () => '2026-01-01T00:00:00.000Z' };
 const defaultBatch: BatchOptions = { flushAt: 100 };
 
-type RecorderOverrides = Partial<Omit<FlightRecorderOptions, 'batch'>> & {
-  batch?: Partial<BatchOptions>;
-};
+type RecorderOverrides = Partial<FlightRecorderOptions>;
 
 const createRecorder = (overrides: RecorderOverrides = {}) =>
-  new FlightRecorder({
+  createFlightRecorder({
     url: defaultUrl,
     fetch: defaultFetch,
     clientKey: defaultClientKey,
     scheduler: defaultScheduler,
     clock: defaultClock,
+    retry: { retries: 0 },
     ...overrides,
     batch: { ...defaultBatch, ...overrides.batch },
   });

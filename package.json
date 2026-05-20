@@ -26,6 +26,14 @@
     "prepack": "pnpm build"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Unleash/sdk-flight-recorder.git"
+  },
+  "homepage": "https://github.com/Unleash/sdk-flight-recorder#readme",
+  "bugs": {
+    "url": "https://github.com/Unleash/sdk-flight-recorder/issues"
+  },
   "publishConfig": {
     "access": "public"
   },

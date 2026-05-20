@@ -10,7 +10,7 @@ import {
   type ImpressionEvent,
 } from './flight-recorder.js';
 import type { Scheduler } from './scheduler.js';
-import { createGate, createGatedFetch } from './test-utils.js';
+import { createGate, createGatedFetch } from './test-gate.js';
 import { ControllableTimer } from './timer.js';
 import { TimerScheduler } from './timer-scheduler.js';
 

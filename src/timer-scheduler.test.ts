@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createGate } from './test-gate.js';
-import { ControllableTimer } from './timer.js';
+import { ControllableTimer } from './test-utils/controllable-timer.js';
+import { createGate } from './test-utils/test-gate.js';
 import { TimerScheduler } from './timer-scheduler.js';
 
 describe('TimerScheduler', () => {

@@ -8,5 +8,5 @@
     "declarationMap": true,
     "sourceMap": true
   },
-  "exclude": ["src/**/*.test.ts", "src/**/*.bench.ts"]
+  "exclude": ["src/**/*.test.ts", "src/**/*.bench.ts", "src/test-utils/**"]
 }

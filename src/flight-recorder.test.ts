@@ -4,8 +4,8 @@ import type { Clock } from './clock.js';
 import type { BatchOptions, CustomEvent, ErrorInfo, ImpressionEvent } from './flight-recorder.js';
 import { createFlightRecorder, type FlightRecorderOptions } from './index.js';
 import type { Scheduler } from './scheduler.js';
-import { createGate, createGatedFetch } from './test-gate.js';
-import { ControllableTimer } from './timer.js';
+import { ControllableTimer } from './test-utils/controllable-timer.js';
+import { createGate, createGatedFetch } from './test-utils/test-gate.js';
 import { TimerScheduler } from './timer-scheduler.js';
 
 type RequestSnapshot = {

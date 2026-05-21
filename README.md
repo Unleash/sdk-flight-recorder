@@ -51,20 +51,23 @@ for a manual send.
 
 ## Configuration
 
-Beyond the required `url` and `clientKey`, `createFlightRecorder` accepts:
+`createFlightRecorder` accepts the following options (only `url` and `clientKey` are required):
 
-**`batch`** — when to flush. Defaults to `{ flushAt: 10_000, flushAfterMs: 10_000 }`.
-Passing your own `batch` replaces the whole object, not individual fields.
+**`batch`** — object, default `{ flushAt: 10_000, flushAfterMs: 10_000 }`.
+Merges with defaults; you only need to override fields you want to change.
 
-| Field          | Default  | Meaning                                                    |
-| -------------- | -------- | ---------------------------------------------------------- |
-| `flushAt`      | `10_000` | Flush once the buffer holds this many events.              |
-| `flushAfterMs` | `10_000` | Flush at least this often (ms), regardless of buffer size. |
+| Field                     | Default | Meaning                                                                                    |
+| ------------------------- | ------- | ------------------------------------------------------------------------------------------ |
+| `flushAt`                 | `10000` | Flush once the buffer reaches this many events (size-based auto-flush). Required field.    |
+| `flushAfterMs`            | `10000` | Flush at this interval in milliseconds (time-based auto-flush). Omit to disable.           |
+| `maxBufferSizeMultiplier` | `2`     | Maximum buffer capacity = `flushAt × multiplier`. Must be ≥ 1. Defaults to 2x headroom.   |
 
-**`retry`** — `{ retries }`, default `{ retries: 2 }`. Retries a failed flush
-POST with exponential backoff.
+**`retry`** — object, default `{ retries: 2 }`. Retries a failed flush POST
+with exponential backoff.
 
-**`onError`** — failure callback; see [Error handling](#error-handling).
+**`onError`** — function. Failure callback; see [Error handling](#error-handling).
+
+**`fetch`** — function. Custom fetch implementation (defaults to `globalThis.fetch`).
 
 A browser caller that bursts past ~180 events between flushes should lower
 `batch.flushAt` — a large keepalive flush on `close()` exceeds the 64 KB limit.

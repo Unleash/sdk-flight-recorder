@@ -1,5 +1,9 @@
 # Decisions
 
+## Body gzip-compressed by default; `compress: false` to opt out
+
+`createHttpClient` (and `createFlightRecorder`) ship an additional `compress` option defaulting to `true`. When enabled, the NDJSON body is gzipped via the standard `CompressionStream` Web API before being passed to `ky`, with `Content-Encoding: gzip` set so the server transparently decompresses. *Why:* event NDJSON compresses ~5–10× with gzip; cuts wire bytes, fits comfortably under the 64 KB browser keepalive limit on close, and matches what observability ingestion vendors (Datadog, Honeycomb) require. *Why default-on:* the savings are always positive for batch sizes the SDK actually produces (hundreds-to-thousands of events), and the API decompresses transparently — no consumer needs to opt in for the common case. *Why opt-out, not always-on:* leaves an escape hatch for wire-level debugging and proxies that strip `Content-Encoding`. *Why `CompressionStream` and not `node:zlib`:* the SDK targets both Node and browser (Unleash admin UI + Cloud BE); `CompressionStream` is a Web standard available in Node 18+ and all modern browsers, so the same code path runs in both.
+
 ## Tests colocated with source
 
 `src/foo.ts` lives next to `src/foo.test.ts`; no separate `test/` tree. *Why:* keeps the unit under test and its test visually adjacent in the file tree and during edits.

@@ -64,6 +64,10 @@ const createRecorder = (overrides: RecorderOverrides = {}) =>
     scheduler: defaultScheduler,
     clock: defaultClock,
     retry: { retries: 0 },
+    // Tests inspect raw request bodies; compression lives in a dedicated test
+    // in `http-client.test.ts`. Opting out here keeps body assertions readable
+    // and the snapshotRequest helper simple.
+    compress: false,
     ...overrides,
     batch: { ...defaultBatch, ...overrides.batch },
   });

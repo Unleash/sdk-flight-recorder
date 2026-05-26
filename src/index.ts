@@ -46,6 +46,11 @@ export type FlightRecorderOptions = {
   clock?: Clock;
   retry?: { retries: number };
   onError?: (info: ErrorInfo) => void;
+  // Defaults to true. gzip-compresses outgoing batches; the API decompresses
+  // transparently. Cuts wire size ~5-10x on typical NDJSON event batches —
+  // helpful for keepalive (browser 64 KB limit) and any cellular/metered
+  // network. Set to false only when wire-level inspection is needed.
+  compress?: boolean;
 };
 
 // Composition root: wires the production collaborators — the global fetch
@@ -68,6 +73,7 @@ export const createFlightRecorder = (options: FlightRecorderOptions): FlightReco
     },
     fetch: options.fetch ?? globalThis.fetch,
     retries: options.retry?.retries ?? DEFAULT_RETRY.retries,
+    compress: options.compress,
   });
   const buffer = createRecorderBuffer({ maxSize: batch.flushAt * multiplier });
   return new FlightRecorder({

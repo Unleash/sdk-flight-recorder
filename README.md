@@ -71,6 +71,36 @@ with exponential backoff.
 
 A browser caller that bursts past ~180 events between flushes should lower
 `batch.flushAt` — a large keepalive flush on `close()` exceeds the 64 KB limit.
+(Compression helps here: gzipped batches typically fit even at higher event
+counts.)
+
+## Batching model
+
+The recorder accumulates events in memory and flushes them as one POST per
+batch. Per-event HTTP would cost orders of magnitude more in network overhead
+and would defeat the server's batched ingest path.
+
+**What the recorder does:**
+
+- In-memory buffer with bounded size; overflow surfaces via
+  `onError({ reason: 'queueFull' })` rather than throwing
+- Periodic flush + size-based flush, whichever fires first
+- Single POST per flush; body is the full batch as NDJSON
+- gzip on the body by default (cuts wire bytes ~5–10× on JSON)
+- Retry transport errors only; drop on persistent failure, surface via
+  `onError({ reason: 'persistentFailure' })` — no on-disk persistence, no
+  infinite retry queue
+- `record()` never throws
+
+**Default batch size is large by design.** `flushAt: 10_000` trades higher
+peak SDK memory for fewer HTTP requests per second, which the server-side
+ingest path is optimised for: fewer larger batches put less pressure on the
+backend than many small ones.
+
+The trade-off is higher peak memory per SDK instance — up to ~7 MB at the
+default 20k cap (`flushAt × maxBufferSizeMultiplier`), or ~400 KB after gzip.
+If you're embedding in a memory-constrained runtime (edge worker, IoT,
+mobile), lower `flushAt` — `flushAt: 100` drops peak memory roughly 100×.
 
 ## Error handling
 

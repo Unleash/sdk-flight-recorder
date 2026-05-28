@@ -4,8 +4,8 @@ import { OTLPLogExporter as OTLPLogExporterProto } from '@opentelemetry/exporter
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import {
   BatchLogRecordProcessor,
-  type LogRecordExporter,
   LoggerProvider,
+  type LogRecordExporter,
 } from '@opentelemetry/sdk-logs';
 import type { CustomEvent, ImpressionEvent } from '../flight-recorder.js';
 import { semanticEventKey } from '../semantic-event-key.js';
@@ -48,11 +48,7 @@ const flattenInto = (
 ): void => {
   for (const [key, value] of Object.entries(source)) {
     const attributeKey = `${prefix}.${key}`;
-    if (
-      typeof value === 'string' ||
-      typeof value === 'number' ||
-      typeof value === 'boolean'
-    ) {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
       target[attributeKey] = value;
     } else {
       target[attributeKey] = JSON.stringify(value);

@@ -80,9 +80,7 @@ it('encodes variant as feature_flag.result.variant', async () => {
   const exporter = new InMemoryLogRecordExporter();
   const recorder = createRecorder({ exporter });
 
-  recorder.record(
-    makeImpressionEvent({ eventType: 'getVariant', variant: 'treatment' }),
-  );
+  recorder.record(makeImpressionEvent({ eventType: 'getVariant', variant: 'treatment' }));
   await recorder.flush();
 
   const [record] = exporter.getFinishedLogRecords();
@@ -104,9 +102,7 @@ it('encodes custom event payload as namespaced payload.* attributes', async () =
   const exporter = new InMemoryLogRecordExporter();
   const recorder = createRecorder({ exporter });
 
-  recorder.record(
-    makeCustomEvent({ payload: { amount: 99, currency: 'USD' } }),
-  );
+  recorder.record(makeCustomEvent({ payload: { amount: 99, currency: 'USD' } }));
   await recorder.flush();
 
   const [record] = exporter.getFinishedLogRecords();

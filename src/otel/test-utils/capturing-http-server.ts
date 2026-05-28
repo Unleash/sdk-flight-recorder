@@ -25,7 +25,10 @@ export const startCapturingHttpServer = (): Promise<CapturingHttpServer> => {
       path: req.url ?? '',
       method: req.method ?? '',
       headers: Object.fromEntries(
-        Object.entries(req.headers).map(([k, v]) => [k, Array.isArray(v) ? v.join(',') : (v ?? '')]),
+        Object.entries(req.headers).map(([k, v]) => [
+          k,
+          Array.isArray(v) ? v.join(',') : (v ?? ''),
+        ]),
       ),
       body: Buffer.concat(chunks),
     });

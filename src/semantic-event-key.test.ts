@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CustomEvent, ImpressionEvent } from './flight-recorder.js';
+import type { AdminEvent, CustomEvent, ImpressionEvent } from './flight-recorder.js';
 import { semanticEventKey } from './semantic-event-key.js';
 
 const defaultImpression: ImpressionEvent = {
@@ -22,6 +22,17 @@ const defaultCustom: CustomEvent = {
 
 const makeCustom = (overrides: Partial<CustomEvent> = {}): CustomEvent => ({
   ...defaultCustom,
+  ...overrides,
+});
+
+const defaultAdmin: AdminEvent = {
+  eventType: 'admin',
+  context: {},
+  eventName: 'user-created',
+};
+
+const makeAdmin = (overrides: Partial<AdminEvent> = {}): AdminEvent => ({
+  ...defaultAdmin,
   ...overrides,
 });
 
@@ -88,6 +99,20 @@ describe('semanticEventKey', () => {
     const userTwo = makeCustom({ context: { userId: 'user-2' } });
 
     expect(semanticEventKey(userOne)).not.toBe(semanticEventKey(userTwo));
+  });
+
+  it('distinguishes admin events with different names', () => {
+    const userCreated = makeAdmin({ eventName: 'user-created' });
+    const userDeleted = makeAdmin({ eventName: 'user-deleted' });
+
+    expect(semanticEventKey(userCreated)).not.toBe(semanticEventKey(userDeleted));
+  });
+
+  it('never collides an admin event with a custom event of the same name', () => {
+    const custom = makeCustom({ eventName: 'user-created' });
+    const admin = makeAdmin({ eventName: 'user-created' });
+
+    expect(semanticEventKey(admin)).not.toBe(semanticEventKey(custom));
   });
 
   it('never collides an impression with a custom event', () => {

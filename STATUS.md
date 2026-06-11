@@ -2,7 +2,7 @@
 
 Snapshot of where the port stands. **This file goes stale fast** — update it each TDD step or treat it as a handoff snapshot only.
 
-Last updated: 2026-05-20 (one POST in flight at a time via `this.sending` gate; atomic drain — no per-POST cap, no parallel keys array; `batch` now `{ flushAt; maxBufferSizeMultiplier?; flushAfterMs? }` — `flushAt` required, multiplier defaults to `DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER` (2); cap = `flushAt × multiplier`; gate pattern extracted to `src/test-utils.ts`)
+Last updated: 2026-06-11 (`AdminEvent` added — same shape as `CustomEvent`, `eventType: 'admin'`; flows through `record()`, dedup key, and heterogeneous batches; exported from `index.ts`)
 
 ## What's built
 
@@ -16,7 +16,7 @@ Last updated: 2026-05-20 (one POST in flight at a time via `this.sending` gate; 
 - `flush()` — no-op if closed; `if (this.sending) await this.sending;` gate; then drains the whole buffer, posts via `httpClient`, stores the send in `this.sending` (cleared in `.finally`). The post body work lives in a small private `send(toSend, options)` method so `flush()` stays gate/drain shaped. `onError` fires on persistent failure.
 - `close()` — `await scheduler.stop()` (resolves after any in-flight periodic handler settles), runs a final `flush({ keepalive: true })`, then marks status closed (status flip after the flush so its own guard doesn't skip the drain).
 - **`this.sending` gate** — `private sending: Promise<void> | undefined`. Every `flush()` (manual, periodic, size-trigger) awaits it once, so at most one POST is on the wire at any time. A plain `if` is enough because the drain is atomic — concurrent callers wake to an empty buffer (or only what `record()` added during the send) and either return or start one new send.
-- Types: `ImpressionEvent` (discriminated by `eventType: 'isEnabled' | 'getVariant'`), `CustomEvent` (`eventType: 'custom'`, `context`, `eventName: string`, `payload?: Record<string, unknown>`). The recorder stamps `timestamp` internally via the injected `Clock`. `ErrorInfo` is a discriminated union of `persistentFailure` and `queueFull`. `BatchOptions` is `{ flushAt: number; maxBufferSizeMultiplier?: number; flushAfterMs?: number }` — `DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER` (= 2) is exported alongside the type.
+- Types: `ImpressionEvent` (discriminated by `eventType: 'isEnabled' | 'getVariant'`), `CustomEvent` (`eventType: 'custom'`, `context`, `eventName: string`, `payload?: Record<string, unknown>`), `AdminEvent` (same shape as `CustomEvent`, `eventType: 'admin'`). The recorder stamps `timestamp` internally via the injected `Clock`. `ErrorInfo` is a discriminated union of `persistentFailure` and `queueFull`. `BatchOptions` is `{ flushAt: number; maxBufferSizeMultiplier?: number; flushAfterMs?: number }` — `DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER` (= 2) is exported alongside the type.
 
 `src/http-client.ts`
 - `createHttpClient({ url, headers, fetch, retries }): HttpClient`. Single method: `post(body: string): Promise<void>`. Wraps ky (retry/methods/headers/fetch). The only module that imports `ky`.
@@ -33,9 +33,9 @@ Last updated: 2026-05-20 (one POST in flight at a time via `this.sending` gate; 
 `src/ndjson.ts`
 - `toNdjson(items: ReadonlyArray<unknown>): string` — generic NDJSON serializer. One JSON object per line, trailing `\n`. Returns `''` for empty input (the recorder's `flush` already guards against calling it that way, but the function handles it safely).
 
-## Tests (37 passing)
+## Tests (42 passing)
 
-`src/flight-recorder.test.ts` (16 tests — no ky backoff at this seam)
+`src/flight-recorder.test.ts` (15 tests — no ky backoff at this seam)
 - `'throws when batch.flushAt is not provided'` — runtime guard for JS callers; type already requires it.
 - `'throws when batch.maxBufferSizeMultiplier is less than 1'` — runtime guard; types can't constrain `number >= 1`.
 - `'can flush with no events'` — empty-buffer guard.
@@ -44,7 +44,7 @@ Last updated: 2026-05-20 (one POST in flight at a time via `this.sending` gate; 
 - `'flushes automatically after the configured time elapses'` — time-based auto-flush via periodic `scheduler.runEvery(flushAfterMs, ...)` on a `TimerScheduler` + `ControllableTimer`.
 - `'a full buffer drops the event and reports queueFull through onError'` — `maxBufferSize` overflow path.
 - `'concurrent flushes ship events sequentially in record order'` — gating: two overlapping `flush()` calls share a fake fetch tracking concurrent in-flight count. Asserts `maxConcurrent === 1` and bodies are `[before, during]` in record order. Pins the `this.sending` gate.
-- `'ships both impression and custom events in one batch'` — heterogeneous NDJSON body; pins custom-event wire shape.
+- `'ships impression, custom, and admin events in one batch'` — heterogeneous NDJSON body; pins custom- and admin-event wire shapes.
 - `'sends custom events with the same eventName but different payloads separately'` — dedup distinguishes by `eventName` + `payload`.
 - `'duplicate events recorded within one flush window reach the wire only once'` — both impressions and custom events.
 - `'invokes onError when the transport fails'` — `retry: { retries: 0 }`, asserts persistentFailure shape.
@@ -53,14 +53,18 @@ Last updated: 2026-05-20 (one POST in flight at a time via `this.sending` gate; 
 - `'sends remaining events with keepalive on close'` — `close()` flushes pending with `keepalive: true`.
 - `'flushes pending events and stops the periodic flush on close'` — `close()` flushes pending + transitions scheduler to `'stopped'`.
 
-`src/http-client.test.ts` (2 tests — backoff bypassed via `retryDelay: () => 0`)
-- POST happy-path + retries-when-configured (covers ky `limit: options.retries` + `methods: ['post']`).
+`src/http-client.test.ts` (3 tests — backoff bypassed via `retryDelay: () => 0`)
+- Keepalive forwarding, gzip + content-encoding by default, retries-when-configured (covers ky `limit: options.retries` + `methods: ['post']`).
 
-`src/event-buffer.test.ts` (2 tests)
-- Buffer add/duplicate/overflow + drain/clear behavior in isolation.
+`src/event-buffer.test.ts` (3 tests)
+- Buffer add/duplicate/overflow + drain-resets-window behavior in isolation.
+- Per-event `occurrenceCount` over the flush window.
 - Dedup-by-injected-key (not by event identity).
 
-`src/semantic-event-key.test.ts` (11 tests) — covers the dedup key builder (`eventType` + identifying fields, `JSON.stringify(context)`/`payload` subtrees), excludes `timestamp`, handles both impression and custom shapes.
+`src/gzip.test.ts` (2 tests)
+- Compress/decompress round-trip, including multi-byte UTF-8.
+
+`src/semantic-event-key.test.ts` (13 tests) — covers the dedup key builder (`eventType` + identifying fields, `JSON.stringify(context)`/`payload` subtrees), excludes `timestamp`, handles impression, custom, and admin shapes (admin keys carry `eventName` and never collide with same-name custom events).
 
 `src/ndjson.test.ts` (1 test)
 - `'emits one JSON object per line with a trailing newline'`
@@ -69,7 +73,7 @@ Last updated: 2026-05-20 (one POST in flight at a time via `this.sending` gate; 
 - Runs-per-tick, runEvery-twice-throws, status lifecycle, no-run-after-stop, stop-awaits-in-flight.
 
 Test conveniences in `flight-recorder.test.ts`:
-- Module-level `defaultUrl`, `defaultFetch`, `defaultClientKey`, and a `createRecorder(overrides?)` factory. `makeImpressionEvent(overrides?)` and `makeCustomEvent(overrides?)` factories with sensible defaults — tests override only the field under assertion with a value visibly different from the default.
+- Module-level `defaultUrl`, `defaultFetch`, `defaultClientKey`, and a `createRecorder(overrides?)` factory. `makeImpressionEvent(overrides?)`, `makeCustomEvent(overrides?)`, and `makeAdminEvent(overrides?)` factories with sensible defaults — tests override only the field under assertion with a value visibly different from the default.
 
 ## What's deliberately NOT yet built
 

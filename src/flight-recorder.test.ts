@@ -1,7 +1,13 @@
 import { NetworkError } from 'ky';
 import { describe, expect, it } from 'vitest';
 import type { Clock } from './clock.js';
-import type { BatchOptions, CustomEvent, ErrorInfo, ImpressionEvent } from './flight-recorder.js';
+import type {
+  AdminEvent,
+  BatchOptions,
+  CustomEvent,
+  ErrorInfo,
+  ImpressionEvent,
+} from './flight-recorder.js';
 import { createFlightRecorder, type FlightRecorderOptions } from './index.js';
 import type { Scheduler } from './scheduler.js';
 import { ControllableTimer } from './test-utils/controllable-timer.js';
@@ -84,6 +90,13 @@ const makeCustomEvent = (overrides: Partial<CustomEvent> = {}): CustomEvent => (
   eventType: 'custom',
   context: {},
   eventName: 'default-custom-event',
+  ...overrides,
+});
+
+const makeAdminEvent = (overrides: Partial<AdminEvent> = {}): AdminEvent => ({
+  eventType: 'admin',
+  context: {},
+  eventName: 'default-admin-event',
   ...overrides,
 });
 
@@ -239,7 +252,7 @@ describe('FlightRecorder', () => {
     ]);
   });
 
-  it('ships both impression and custom events in one batch', async () => {
+  it('ships impression, custom, and admin events in one batch', async () => {
     const snapshots: Array<Promise<RequestSnapshot>> = [];
     const fakeFetch: typeof fetch = async (input) => {
       snapshots.push(snapshotRequest(input as Request));
@@ -255,10 +268,12 @@ describe('FlightRecorder', () => {
       eventName: 'purchase',
       payload,
     });
+    const admin = makeAdminEvent({ eventName: 'user-created', payload: { role: 'editor' } });
     const recorder = createRecorder({ fetch: fakeFetch });
 
     recorder.record(impression);
     recorder.record(custom);
+    recorder.record(admin);
     await recorder.flush();
 
     const events = await recordedEvents(snapshots);
@@ -268,6 +283,11 @@ describe('FlightRecorder', () => {
         eventType: 'custom',
         eventName: 'purchase',
         payload,
+      },
+      {
+        eventType: 'admin',
+        eventName: 'user-created',
+        payload: { role: 'editor' },
       },
     ]);
   });

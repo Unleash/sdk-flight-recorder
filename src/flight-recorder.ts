@@ -21,8 +21,15 @@ export type CustomEvent = {
   payload?: Record<string, unknown>;
 };
 
+export type AdminEvent = {
+  eventType: 'admin';
+  context: Record<string, unknown>;
+  eventName: string;
+  payload?: Record<string, unknown>;
+};
+
 // What the buffer holds: a recorded event plus the `timestamp` that `record()` stamps on it.
-export type StampedEvent = (ImpressionEvent | CustomEvent) & { timestamp: string };
+export type StampedEvent = (ImpressionEvent | CustomEvent | AdminEvent) & { timestamp: string };
 
 // What the wire carries: a StampedEvent enriched at drain time with its occurrenceCount.
 export type WireEvent = DrainedEvent<StampedEvent>;
@@ -93,7 +100,7 @@ export class FlightRecorder {
     }
   }
 
-  record(event: ImpressionEvent | CustomEvent): void {
+  record(event: ImpressionEvent | CustomEvent | AdminEvent): void {
     if (this.status === 'closed') return;
     const result = this.buffer.add({ ...event, timestamp: this.clock.now() });
     if (result === 'duplicate') return;

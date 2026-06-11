@@ -12,6 +12,7 @@ import { systemTimer } from './timer.js';
 import { TimerScheduler } from './timer-scheduler.js';
 
 export type {
+  AdminEvent,
   BatchOptions,
   CustomEvent,
   ErrorInfo,

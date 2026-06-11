@@ -1,8 +1,9 @@
 export type AddResult = 'added' | 'duplicate' | 'overflow';
 
+export type DrainedEvent<T> = { event: T; occurrenceCount: number };
+
 export class EventBuffer<T> {
-  private readonly events: T[] = [];
-  private readonly seen = new Set<string>();
+  private readonly events = new Map<string, DrainedEvent<T>>();
   private readonly maxSize: number | undefined;
   private readonly dedupKey: (event: T) => string;
 
@@ -12,23 +13,26 @@ export class EventBuffer<T> {
   }
 
   get size(): number {
-    return this.events.length;
+    return this.events.size;
   }
 
   add(event: T): AddResult {
     const key = this.dedupKey(event);
-    if (this.seen.has(key)) return 'duplicate';
-    if (this.maxSize !== undefined && this.events.length >= this.maxSize) {
+    const entry = this.events.get(key);
+    if (entry !== undefined) {
+      entry.occurrenceCount++;
+      return 'duplicate';
+    }
+    if (this.maxSize !== undefined && this.events.size >= this.maxSize) {
       return 'overflow';
     }
-    this.seen.add(key);
-    this.events.push(event);
+    this.events.set(key, { event, occurrenceCount: 1 });
     return 'added';
   }
 
-  drain(): T[] {
-    const out = this.events.splice(0);
-    this.seen.clear();
-    return out;
+  drain(): DrainedEvent<T>[] {
+    const result = Array.from(this.events.values());
+    this.events.clear();
+    return result;
   }
 }

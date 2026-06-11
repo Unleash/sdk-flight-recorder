@@ -14,9 +14,23 @@ describe('EventBuffer', () => {
     expect(buffer.add(e1)).toBe('duplicate');
     expect(buffer.add(e2)).toBe('overflow');
 
-    expect(buffer.drain()).toEqual([e1]);
+    expect(buffer.drain()).toEqual([{ event: e1, occurrenceCount: 2 }]);
     expect(buffer.size).toBe(0);
     expect(buffer.add(e1)).toBe('added');
+  });
+
+  it('counts how many times each event was recorded in the window', () => {
+    const buffer = new EventBuffer<{ id: number }>({ dedupKey: (e) => String(e.id) });
+
+    buffer.add({ id: 1 });
+    buffer.add({ id: 1 });
+    buffer.add({ id: 1 });
+    buffer.add({ id: 2 });
+
+    expect(buffer.drain()).toEqual([
+      { event: { id: 1 }, occurrenceCount: 3 },
+      { event: { id: 2 }, occurrenceCount: 1 },
+    ]);
   });
 
   it('dedupes by the injected key, not by event identity', () => {

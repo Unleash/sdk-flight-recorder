@@ -288,3 +288,22 @@ This reverses the earlier "keep SDK-provided UUIDv4 IDs for correlation" rationa
 *Why a separate `Clock`, not `now()` on `Timer`/`Scheduler`:* this honours the "`Scheduler` collaborator with `runEvery`, not `Clock`" decision above — scheduling recurring work and reading the current instant are distinct concerns. `Timer`/`Scheduler` keep their scheduling-only surface; `Clock` is read-only time. That earlier decision rejected a `Clock` that *bundled* `now()` with `setTimeout`; a `now()`-only `Clock` alongside the scheduler keeps each abstraction single-purpose.
 
 `Clock` is required DI on `FlightRecorderOptions` (no bastard injection). The composition root (`createFlightRecorder`) wires `systemClock` (`() => new Date().toISOString()`); tests inject a fixed-value clock. `semanticEventKey` excludes `timestamp` from the dedup key, so two duplicate `record()` calls stamped at different instants still collapse.
+
+## `occurrenceCount` stamped on every wire event
+
+Each event in the NDJSON batch carries `occurrenceCount: number` — how many times that event (by semantic key) was recorded in the flush window. `1` means no duplicates were seen; `2` means one duplicate was dropped, etc. *Why:* enables ClickHouse analytics on dedup percentage and true impression volume (`SUM(occurrenceCount)`) without any additional aggregation infrastructure. The field resolves at `drain()` time (it accumulates over the window), so it lives on the internal `WireEvent = StampedEvent & { occurrenceCount: number }` type — stamped onto the wire shape at flush, not onto the buffered `StampedEvent` at `record()`.
+
+## `EventBuffer` storage unified into one `Map<string, DrainedEvent<T>>`
+
+The buffer holds a single `Map<string, DrainedEvent<T>>` keyed by `dedupKey(event)`, where `DrainedEvent<T> = { event: T; occurrenceCount: number }`. There is no parallel `events: T[]` array and no separate `seen` set. `add()` does one `Map.get`: a hit increments `entry.occurrenceCount` in place (no re-`set`, no key rehash) and returns `'duplicate'`; a miss either trips `maxSize` (`'overflow'`) or stores a fresh `{ event, occurrenceCount: 1 }` (`'added'`). `drain()` is `Array.from(this.events.values())` then `clear()` — no per-event key recomputation. `size` is `this.events.size`. Map insertion order preserves first-seen record order on the wire.
+
+*Why one structure, not two:* an intermediate version kept `events: T[]` for order alongside a `Map<string, number>` for counts, and `drain()` recomputed `dedupKey(event)` for all N buffered events to pair each with its count. That recompute runs the `JSON.stringify`-over-`context` key builder N times per flush — and it was measurable, not free as first assumed. Collapsing to one Map (values already carry both the event and its count, in insertion order) removes the recompute entirely and deletes the array-vs-map ordering-coupling the advisor flagged as brittle.
+
+*Performance — pre vs. post the unification, `npm run bench` (Apple Silicon, single core, field-list `cheap key`):*
+
+| Workload (add 10k + drain) | Two structures (array + count map, recompute at drain) | One `Map<string, DrainedEvent>` | Change |
+|---|---|---|---|
+| 10k distinct events | ~103 ops/s | ~205 ops/s | **~2.0× faster** |
+| 10k events, 95% duplicates | ~220 ops/s | ~231 ops/s | ~1.05× faster |
+
+The distinct workload nearly doubles because it drains 10k unique events — the old `drain()` paid 10k redundant `dedupKey` calls there; the new one pays zero. The 95%-duplicate workload barely moves: it's dominated by the `add()` duplicate fast-path (one `get` + in-place `++`), which the change leaves untouched. The field-list-vs-replacer ~2× key-builder speedup (separate decision) is preserved across both. Absolute throughput is machine-specific; the ratios are the durable claim — re-measure with `npm run bench`.

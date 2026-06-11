@@ -21,9 +21,11 @@ export type CustomEvent = {
   payload?: Record<string, unknown>;
 };
 
-// What the buffer holds and the wire carries: a recorded event plus the
-// `timestamp` that `record()` stamps on it.
+// What the buffer holds: a recorded event plus the `timestamp` that `record()` stamps on it.
 export type StampedEvent = (ImpressionEvent | CustomEvent) & { timestamp: string };
+
+// What the wire carries: a StampedEvent plus the occurrenceCount resolved at drain time.
+export type WireEvent = StampedEvent & { occurrenceCount: number };
 
 export type ErrorInfo =
   | { reason: 'persistentFailure'; droppedEventCount: number; error: unknown }
@@ -108,14 +110,16 @@ export class FlightRecorder {
     if (this.status === 'closed') return;
     if (this.sending) await this.sending;
     if (this.buffer.size === 0) return;
-    const toSend = this.buffer.drain();
+    const toSend: WireEvent[] = this.buffer
+      .drain()
+      .map(({ event, occurrenceCount }) => ({ ...event, occurrenceCount }));
     this.sending = this.send(toSend, options).finally(() => {
       this.sending = undefined;
     });
     await this.sending;
   }
 
-  private async send(toSend: StampedEvent[], options?: { keepalive?: boolean }): Promise<void> {
+  private async send(toSend: WireEvent[], options?: { keepalive?: boolean }): Promise<void> {
     try {
       await this.httpClient.post(toNdjson(toSend), { keepalive: options?.keepalive });
     } catch (err) {

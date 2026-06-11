@@ -1,5 +1,5 @@
 import type { Clock } from './clock.js';
-import { EventBuffer } from './event-buffer.js';
+import { type DrainedEvent, EventBuffer } from './event-buffer.js';
 import type { HttpClient } from './http-client.js';
 import { toNdjson } from './ndjson.js';
 import type { Scheduler } from './scheduler.js';
@@ -21,9 +21,11 @@ export type CustomEvent = {
   payload?: Record<string, unknown>;
 };
 
-// What the buffer holds and the wire carries: a recorded event plus the
-// `timestamp` that `record()` stamps on it.
+// What the buffer holds: a recorded event plus the `timestamp` that `record()` stamps on it.
 export type StampedEvent = (ImpressionEvent | CustomEvent) & { timestamp: string };
+
+// What the wire carries: a StampedEvent enriched at drain time with its occurrenceCount.
+export type WireEvent = DrainedEvent<StampedEvent>;
 
 export type ErrorInfo =
   | { reason: 'persistentFailure'; droppedEventCount: number; error: unknown }
@@ -115,7 +117,7 @@ export class FlightRecorder {
     await this.sending;
   }
 
-  private async send(toSend: StampedEvent[], options?: { keepalive?: boolean }): Promise<void> {
+  private async send(toSend: WireEvent[], options?: { keepalive?: boolean }): Promise<void> {
     try {
       await this.httpClient.post(toNdjson(toSend), { keepalive: options?.keepalive });
     } catch (err) {

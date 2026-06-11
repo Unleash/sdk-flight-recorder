@@ -129,7 +129,7 @@ describe('FlightRecorder', () => {
           'content-type': 'application/ndjson',
           authorization: 'default:development.real-key-shape',
         },
-        body: `${JSON.stringify({ ...event, timestamp: defaultClock.now() })}\n`,
+        body: `${JSON.stringify({ ...event, timestamp: defaultClock.now(), occurrenceCount: 1 })}\n`,
       },
     ]);
   });
@@ -230,8 +230,12 @@ describe('FlightRecorder', () => {
 
     expect(maxConcurrent).toBe(1);
     expect(await Promise.all(snapshots)).toMatchObject([
-      { body: `${JSON.stringify({ ...before, timestamp: defaultClock.now() })}\n` },
-      { body: `${JSON.stringify({ ...during, timestamp: defaultClock.now() })}\n` },
+      {
+        body: `${JSON.stringify({ ...before, timestamp: defaultClock.now(), occurrenceCount: 1 })}\n`,
+      },
+      {
+        body: `${JSON.stringify({ ...during, timestamp: defaultClock.now(), occurrenceCount: 1 })}\n`,
+      },
     ]);
   });
 
@@ -303,11 +307,12 @@ describe('FlightRecorder', () => {
 
     const events = await recordedEvents(snapshots);
     expect(events).toMatchObject([
-      { eventType: 'isEnabled', featureName: 'demo.flag' },
+      { eventType: 'isEnabled', featureName: 'demo.flag', occurrenceCount: 2 },
       {
         eventType: 'custom',
         eventName: 'signup',
         payload: { plan: 'pro' },
+        occurrenceCount: 2,
       },
     ]);
   });
@@ -391,7 +396,7 @@ describe('FlightRecorder', () => {
 
     const [snapshot] = await Promise.all(snapshots);
     expect(snapshot).toMatchObject({
-      body: `${JSON.stringify({ ...event, timestamp: defaultClock.now() })}\n`,
+      body: `${JSON.stringify({ ...event, timestamp: defaultClock.now(), occurrenceCount: 1 })}\n`,
       keepalive: true,
     });
   });

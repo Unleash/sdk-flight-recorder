@@ -1,9 +1,13 @@
 export type AddResult = 'added' | 'duplicate' | 'overflow';
 
-export type DrainedEvent<T> = { event: T; occurrenceCount: number };
+// A drained event is the buffered event flattened with the number of times it
+// was recorded in the window. `occurrenceCount` is 1 when no duplicates were seen.
+export type DrainedEvent<T> = T & { occurrenceCount: number };
 
-export class EventBuffer<T> {
-  private readonly events = new Map<string, DrainedEvent<T>>();
+export class EventBuffer<T extends object> {
+  // Storage holds the count *beside* the event (not on it) so a duplicate can
+  // bump the counter in place — no per-duplicate re-spread on the hot path.
+  private readonly events = new Map<string, { event: T; occurrenceCount: number }>();
   private readonly maxSize: number | undefined;
   private readonly dedupKey: (event: T) => string;
 
@@ -31,7 +35,10 @@ export class EventBuffer<T> {
   }
 
   drain(): DrainedEvent<T>[] {
-    const result = Array.from(this.events.values());
+    const result = Array.from(this.events.values(), ({ event, occurrenceCount }) => ({
+      ...event,
+      occurrenceCount,
+    }));
     this.events.clear();
     return result;
   }

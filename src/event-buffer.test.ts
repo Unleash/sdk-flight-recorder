@@ -14,7 +14,7 @@ describe('EventBuffer', () => {
     expect(buffer.add(e1)).toBe('duplicate');
     expect(buffer.add(e2)).toBe('overflow');
 
-    expect(buffer.drain()).toEqual([{ event: e1, occurrenceCount: 2 }]);
+    expect(buffer.drain()).toEqual([{ ...e1, occurrenceCount: 2 }]);
     expect(buffer.size).toBe(0);
     expect(buffer.add(e1)).toBe('added');
   });
@@ -28,8 +28,8 @@ describe('EventBuffer', () => {
     buffer.add({ id: 2 });
 
     expect(buffer.drain()).toEqual([
-      { event: { id: 1 }, occurrenceCount: 3 },
-      { event: { id: 2 }, occurrenceCount: 1 },
+      { id: 1, occurrenceCount: 3 },
+      { id: 2, occurrenceCount: 1 },
     ]);
   });
 

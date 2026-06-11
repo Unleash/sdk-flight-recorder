@@ -1,5 +1,5 @@
 import type { Clock } from './clock.js';
-import { EventBuffer } from './event-buffer.js';
+import { type DrainedEvent, EventBuffer } from './event-buffer.js';
 import type { HttpClient } from './http-client.js';
 import { toNdjson } from './ndjson.js';
 import type { Scheduler } from './scheduler.js';
@@ -24,8 +24,8 @@ export type CustomEvent = {
 // What the buffer holds: a recorded event plus the `timestamp` that `record()` stamps on it.
 export type StampedEvent = (ImpressionEvent | CustomEvent) & { timestamp: string };
 
-// What the wire carries: a StampedEvent plus the occurrenceCount resolved at drain time.
-export type WireEvent = StampedEvent & { occurrenceCount: number };
+// What the wire carries: a StampedEvent enriched at drain time with its occurrenceCount.
+export type WireEvent = DrainedEvent<StampedEvent>;
 
 export type ErrorInfo =
   | { reason: 'persistentFailure'; droppedEventCount: number; error: unknown }
@@ -110,9 +110,7 @@ export class FlightRecorder {
     if (this.status === 'closed') return;
     if (this.sending) await this.sending;
     if (this.buffer.size === 0) return;
-    const toSend: WireEvent[] = this.buffer
-      .drain()
-      .map(({ event, occurrenceCount }) => ({ ...event, occurrenceCount }));
+    const toSend = this.buffer.drain();
     this.sending = this.send(toSend, options).finally(() => {
       this.sending = undefined;
     });

@@ -57,4 +57,17 @@ describe('EventBuffer', () => {
 
     expect(buffer.drain()).toEqual([{ id: 1, occurrenceCount: 5 }]);
   });
+
+  it('does not mutate the original event object when a duplicate is merged', () => {
+    const buffer = new EventBuffer<{ id: number; occurrenceCount: number }>({
+      dedupKey: (e) => String(e.id),
+    });
+    const stored = ev(1, 7);
+    buffer.add(stored);
+
+    buffer.add(ev(1, 3));
+
+    expect(stored.occurrenceCount).toBe(7);
+    expect(buffer.drain()).toEqual([{ id: 1, occurrenceCount: 10 }]);
+  });
 });

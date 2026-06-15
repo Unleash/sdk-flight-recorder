@@ -418,6 +418,38 @@ describe('FlightRecorder', () => {
     await recorder.close();
   });
 
+  it('reports only the failed events that no longer fit in the buffer when re-added', async () => {
+    const gate = createGate();
+    const errors: ErrorInfo[] = [];
+    let isFirstFetch = true;
+    const fakeFetch: typeof fetch = async () => {
+      if (isFirstFetch) {
+        isFirstFetch = false;
+        await gate.opened;
+        throw new TypeError('Failed to fetch');
+      }
+      return new Response();
+    };
+    const recorder = createRecorder({
+      fetch: fakeFetch,
+      batch: { flushAt: 2 },
+      onError: (info) => errors.push(info),
+    });
+
+    // flushAt 2 + default multiplier 2 = cap 4. #1-2 drain into the held POST;
+    // #3-5 refill the buffer to 3, leaving room for one. Releasing the gate fails
+    // that POST, so re-adding #1-2 fits #1 (3→4) and drops only #2.
+    for (let i = 1; i <= 5; i++) {
+      recorder.record(makeImpressionEvent({ featureName: `flag-${i}` }));
+    }
+    gate.open();
+    await new Promise<void>((resolve) => setImmediate(resolve)); // wait for event loop tick
+
+    expect(errors).toMatchObject([{ reason: 'queueFull', droppedEventCount: 1 }]);
+
+    await recorder.close();
+  });
+
   it('ignores record and flush calls after close', async () => {
     let fetchCalls = 0;
     const fakeFetch: typeof fetch = async () => {

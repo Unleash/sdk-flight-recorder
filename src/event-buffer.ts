@@ -14,15 +14,19 @@ export class EventBuffer<T extends { occurrenceCount: number }> {
     return this.events.size;
   }
 
-  // The stored event carries its own `occurrenceCount`. A collision folds the
-  // incoming count into the buffered event in place — no re-allocation, and a
-  // fresh record (count 1) and a re-added batch (count N) merge the same way.
-  // Storing the event as-is means `drain()` needs no per-event spread.
+  // The stored event carries its own `occurrenceCount`. A collision merges the
+  // counts into a fresh copy rather than mutating in place: the buffer never
+  // writes to an object a caller still holds (drained events stay live during an
+  // in-flight send), so re-adding any reference — even the stored one — is safe.
+  // A fresh record (count 1) and a re-added batch (count N) merge the same way.
   add(event: T): AddResult {
     const key = this.dedupKey(event);
     const entry = this.events.get(key);
     if (entry !== undefined) {
-      entry.occurrenceCount += event.occurrenceCount;
+      this.events.set(key, {
+        ...entry,
+        occurrenceCount: entry.occurrenceCount + event.occurrenceCount,
+      });
       return 'duplicate';
     }
     if (this.maxSize !== undefined && this.events.size >= this.maxSize) {

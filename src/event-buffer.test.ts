@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { EventBuffer } from './event-buffer.js';
 
-const ev = (id: number, occurrenceCount = 1) => ({ id, occurrenceCount });
+const makeEvent = ({ id, occurrenceCount = 1 }: { id: number; occurrenceCount?: number }) => ({
+  id,
+  occurrenceCount,
+});
 
 describe('EventBuffer', () => {
   it('classifies events as added, duplicate, or overflow; drain resets the window', () => {
@@ -11,14 +14,14 @@ describe('EventBuffer', () => {
     });
 
     expect(buffer.size).toBe(0);
-    expect(buffer.add(ev(1))).toBe('added');
+    expect(buffer.add(makeEvent({ id: 1 }))).toBe('added');
     expect(buffer.size).toBe(1);
-    expect(buffer.add(ev(1))).toBe('duplicate');
-    expect(buffer.add(ev(2))).toBe('overflow');
+    expect(buffer.add(makeEvent({ id: 1 }))).toBe('duplicate');
+    expect(buffer.add(makeEvent({ id: 2 }))).toBe('overflow');
 
     expect(buffer.drain()).toEqual([{ id: 1, occurrenceCount: 2 }]);
     expect(buffer.size).toBe(0);
-    expect(buffer.add(ev(1))).toBe('added');
+    expect(buffer.add(makeEvent({ id: 1 }))).toBe('added');
   });
 
   it('counts how many times each event was recorded in the window', () => {
@@ -26,10 +29,10 @@ describe('EventBuffer', () => {
       dedupKey: (e) => String(e.id),
     });
 
-    buffer.add(ev(1));
-    buffer.add(ev(1));
-    buffer.add(ev(1));
-    buffer.add(ev(2));
+    buffer.add(makeEvent({ id: 1 }));
+    buffer.add(makeEvent({ id: 1 }));
+    buffer.add(makeEvent({ id: 1 }));
+    buffer.add(makeEvent({ id: 2 }));
 
     expect(buffer.drain()).toEqual([
       { id: 1, occurrenceCount: 3 },
@@ -52,8 +55,8 @@ describe('EventBuffer', () => {
       dedupKey: (e) => String(e.id),
     });
 
-    buffer.add(ev(1, 2));
-    buffer.add(ev(1, 3));
+    buffer.add(makeEvent({ id: 1, occurrenceCount: 2 }));
+    buffer.add(makeEvent({ id: 1, occurrenceCount: 3 }));
 
     expect(buffer.drain()).toEqual([{ id: 1, occurrenceCount: 5 }]);
   });
@@ -62,10 +65,10 @@ describe('EventBuffer', () => {
     const buffer = new EventBuffer<{ id: number; occurrenceCount: number }>({
       dedupKey: (e) => String(e.id),
     });
-    const stored = ev(1, 7);
+    const stored = makeEvent({ id: 1, occurrenceCount: 7 });
     buffer.add(stored);
 
-    buffer.add(ev(1, 3));
+    buffer.add(makeEvent({ id: 1, occurrenceCount: 3 }));
 
     expect(stored.occurrenceCount).toBe(7);
     expect(buffer.drain()).toEqual([{ id: 1, occurrenceCount: 10 }]);

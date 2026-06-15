@@ -2,12 +2,12 @@
 
 Snapshot of where the port stands. **This file goes stale fast** — update it each TDD step or treat it as a handoff snapshot only.
 
-Last updated: 2026-06-11 (`AdminEvent` added — same shape as `CustomEvent`, `eventType: 'admin'`; flows through `record()`, dedup key, and heterogeneous batches; exported from `index.ts`)
+Last updated: 2026-06-12 (`EventBuffer` now stores the wire shape directly — `occurrenceCount` lives on the event, stamped at `record()` time; `add(event)` folds counts in place, `drain()` returns stored objects with no spread, `DrainedEvent<T>` removed (~1.13× on the distinct bench). Earlier same-day: failed flushes retry by re-adding the drained batch; `ErrorInfo` simplified to just `queueFull`; `persistentFailure`/`restore()` removed)
 
 ## What's built
 
 `src/event-buffer.ts`
-- `EventBuffer<T>` — generic class for buffering, dedup, and cap. `add(event): AddResult` returns `'added' | 'duplicate' | 'overflow'`. `drain(): T[]` splices the array and clears the seen set atomically. `size` getter. `maxSize` cap optional (drop new events on overflow). Dedup via injected key fn, first-seen-wins, fully cleared on drain.
+- `EventBuffer<T extends { occurrenceCount: number }>` — buffering, dedup, and cap; `T` is the wire shape itself. `add(event): AddResult` returns `'added' | 'duplicate' | 'overflow'`; a hit folds `event.occurrenceCount` into the buffered event in place. `drain(): T[]` returns the stored objects as-is (no spread) and clears. `size` getter. `maxSize` cap optional (drop new events on overflow). Dedup via injected key fn, first-seen-wins, fully cleared on drain.
 
 `src/flight-recorder.ts`
 - `FlightRecorder` with explicit DI: `{ url, clientKey, fetch, scheduler, clock, batch, retry?, onError? }`. Collaborators required (no defaults); `batch` is required but only its `flushAt` is required-within (`maxBufferSizeMultiplier` defaults to `DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER` = 2, `flushAfterMs` optional — JSDoc on each); `retry?: { retries }` and `onError` opt-in. Only retry knob is `retries` — backoff/cap/status-codes/timeout all use ky's defaults.
@@ -16,7 +16,7 @@ Last updated: 2026-06-11 (`AdminEvent` added — same shape as `CustomEvent`, `e
 - `flush()` — no-op if closed; `if (this.sending) await this.sending;` gate; then drains the whole buffer, posts via `httpClient`, stores the send in `this.sending` (cleared in `.finally`). The post body work lives in a small private `send(toSend, options)` method so `flush()` stays gate/drain shaped. `onError` fires on persistent failure.
 - `close()` — `await scheduler.stop()` (resolves after any in-flight periodic handler settles), runs a final `flush({ keepalive: true })`, then marks status closed (status flip after the flush so its own guard doesn't skip the drain).
 - **`this.sending` gate** — `private sending: Promise<void> | undefined`. Every `flush()` (manual, periodic, size-trigger) awaits it once, so at most one POST is on the wire at any time. A plain `if` is enough because the drain is atomic — concurrent callers wake to an empty buffer (or only what `record()` added during the send) and either return or start one new send.
-- Types: `ImpressionEvent` (discriminated by `eventType: 'isEnabled' | 'getVariant'`), `CustomEvent` (`eventType: 'custom'`, `context`, `eventName: string`, `payload?: Record<string, unknown>`), `AdminEvent` (same shape as `CustomEvent`, `eventType: 'admin'`). The recorder stamps `timestamp` internally via the injected `Clock`. `ErrorInfo` is a discriminated union of `persistentFailure` and `queueFull`. `BatchOptions` is `{ flushAt: number; maxBufferSizeMultiplier?: number; flushAfterMs?: number }` — `DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER` (= 2) is exported alongside the type.
+- Types: `ImpressionEvent` (discriminated by `eventType: 'isEnabled' | 'getVariant'`), `CustomEvent` (`eventType: 'custom'`, `context`, `eventName: string`, `payload?: Record<string, unknown>`), `AdminEvent` (same shape as `CustomEvent`, `eventType: 'admin'`). The recorder stamps `timestamp` internally via the injected `Clock`. `ErrorInfo` is `{ reason: 'queueFull'; droppedEventCount: number }` — the only failure surfaced; retry of failed flushes is internal. `BatchOptions` is `{ flushAt: number; maxBufferSizeMultiplier?: number; flushAfterMs?: number }` — `DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER` (= 2) is exported alongside the type.
 
 `src/http-client.ts`
 - `createHttpClient({ url, headers, fetch, retries }): HttpClient`. Single method: `post(body: string): Promise<void>`. Wraps ky (retry/methods/headers/fetch). The only module that imports `ky`.
@@ -33,9 +33,9 @@ Last updated: 2026-06-11 (`AdminEvent` added — same shape as `CustomEvent`, `e
 `src/ndjson.ts`
 - `toNdjson(items: ReadonlyArray<unknown>): string` — generic NDJSON serializer. One JSON object per line, trailing `\n`. Returns `''` for empty input (the recorder's `flush` already guards against calling it that way, but the function handles it safely).
 
-## Tests (42 passing)
+## Tests (44 passing)
 
-`src/flight-recorder.test.ts` (15 tests — no ky backoff at this seam)
+`src/flight-recorder.test.ts` (16 tests — no ky backoff at this seam)
 - `'throws when batch.flushAt is not provided'` — runtime guard for JS callers; type already requires it.
 - `'throws when batch.maxBufferSizeMultiplier is less than 1'` — runtime guard; types can't constrain `number >= 1`.
 - `'can flush with no events'` — empty-buffer guard.
@@ -47,8 +47,9 @@ Last updated: 2026-06-11 (`AdminEvent` added — same shape as `CustomEvent`, `e
 - `'ships impression, custom, and admin events in one batch'` — heterogeneous NDJSON body; pins custom- and admin-event wire shapes.
 - `'sends custom events with the same eventName but different payloads separately'` — dedup distinguishes by `eventName` + `payload`.
 - `'duplicate events recorded within one flush window reach the wire only once'` — both impressions and custom events.
-- `'invokes onError when the transport fails'` — `retry: { retries: 0 }`, asserts persistentFailure shape.
-- `'only events recorded after a failed flush reach the wire'` — pins drop-no-requeue: fetch fails on the first POST, succeeds on the second; later flush ships only the post-failure event.
+- `'events from a failed flush are retried on the next flush'` — first POST fails, second succeeds; the failed batch is restored and ships alongside the next event.
+- `'a repeat of a failed evaluation increments its count instead of shipping twice'` — pins the accepted dedup tradeoff: a restored event collapses with a later identical eval into one wire entry, `occurrenceCount: 2`.
+- `'events that fail to send are dropped only once the buffer is full'` — `retry: { retries: 0 }`; a held-then-failed POST re-adds into a buffer refilled to cap, so both events overflow and fire a single `queueFull` (`droppedEventCount: 2`) for the batch.
 - `'ignores record and flush calls after close'` — neither path hits the network after `close()`.
 - `'sends remaining events with keepalive on close'` — `close()` flushes pending with `keepalive: true`.
 - `'flushes pending events and stops the periodic flush on close'` — `close()` flushes pending + transitions scheduler to `'stopped'`.
@@ -79,8 +80,8 @@ Test conveniences in `flight-recorder.test.ts`:
 
 Each line is a future TDD step:
 
-- **Transport failure handling.** If `fetch` rejects, the spliced events vanish. No test pins down the desired behavior.
-- **5xx response handling.** `fetch` doesn't reject on a non-2xx status; we'd need `response.ok` and re-queue. Not handled.
+- ~~**Transport failure handling.**~~ Done — a failed flush restores the drained batch into the buffer and retries on the next flush; the cap bounds retention. See the `DECISIONS.md` entry on restore-based retry.
+- **5xx response handling.** `fetch` doesn't reject on a non-2xx status, so ky's retry/`response.ok` path never trips and the batch ships into the void as a "success." We'd need to treat a non-2xx as a failure (ky does this by default once we stop injecting fakes that return bare `new Response()`). Not pinned by a test yet.
 - ~~**Manual `flush()` and size-trigger `void this.flush()` can still race**~~ Done — `this.sending` gate serializes all flush paths (manual, periodic, size-trigger); pinned by `'concurrent flushes ship events sequentially in record order'`.
 - ~~**`CustomEvent` type realignment.**~~ Done — `name` → `eventName`, `timestamp: string` added, `payload` narrowed to `Record<string, unknown>`. Mirrors `ImpressionEvent` prefix; wire passthrough + dedup + mixed batch pinned by tests.
 - ~~**`close()` does not block further `record()` calls.**~~ Done — `record()` and `flush()` early-return after close.

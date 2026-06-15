@@ -1,4 +1,3 @@
-import { NetworkError } from 'ky';
 import { describe, expect, it } from 'vitest';
 import type { Clock } from './clock.js';
 import type {
@@ -337,29 +336,33 @@ describe('FlightRecorder', () => {
     ]);
   });
 
-  it('invokes onError when the transport fails', async () => {
-    const fakeFetch: typeof fetch = async () => {
-      throw new TypeError('Failed to fetch');
-    };
+  it('events from a failed flush are retried on the next flush without surfacing an error', async () => {
+    const snapshots: Array<Promise<RequestSnapshot>> = [];
     const errors: ErrorInfo[] = [];
-    const recorder = createRecorder({
-      fetch: fakeFetch,
-      onError: (info) => errors.push(info),
-    });
+    let isFirstFetch = true;
+    const fakeFetch: typeof fetch = async (input) => {
+      if (isFirstFetch) {
+        isFirstFetch = false;
+        throw new TypeError('Failed to fetch');
+      }
+      snapshots.push(snapshotRequest(input as Request));
+      return new Response();
+    };
+    const recorder = createRecorder({ fetch: fakeFetch, onError: (info) => errors.push(info) });
+    const failed = makeImpressionEvent({ featureName: 'failed' });
+    const next = makeImpressionEvent({ featureName: 'next' });
 
-    recorder.record(makeImpressionEvent());
+    recorder.record(failed);
+    await recorder.flush();
+    recorder.record(next);
     await recorder.flush();
 
-    expect(errors).toMatchObject([
-      {
-        reason: 'persistentFailure',
-        droppedEventCount: 1,
-        error: expect.any(NetworkError),
-      },
-    ]);
+    const events = await recordedEvents(snapshots);
+    expect(events).toMatchObject([{ featureName: 'failed' }, { featureName: 'next' }]);
+    expect(errors).toEqual([]);
   });
 
-  it('only events recorded after a failed flush reach the wire', async () => {
+  it("an evaluation's occurrence count is continuous across a failed flush", async () => {
     const snapshots: Array<Promise<RequestSnapshot>> = [];
     let isFirstFetch = true;
     const fakeFetch: typeof fetch = async (input) => {
@@ -371,16 +374,48 @@ describe('FlightRecorder', () => {
       return new Response();
     };
     const recorder = createRecorder({ fetch: fakeFetch });
-    const failed = makeImpressionEvent({ featureName: 'failed' });
-    const next = makeImpressionEvent({ featureName: 'next' });
+    const evaluation = makeImpressionEvent({ featureName: 'demo.flag' });
 
-    recorder.record(failed);
+    recorder.record(evaluation);
+    recorder.record(evaluation);
     await recorder.flush();
-    recorder.record(next);
+    recorder.record(evaluation);
     await recorder.flush();
 
     const events = await recordedEvents(snapshots);
-    expect(events).toMatchObject([{ featureName: 'next' }]);
+    expect(events).toMatchObject([{ featureName: 'demo.flag', occurrenceCount: 3 }]);
+  });
+
+  it('events that fail to send are dropped only once the buffer is full', async () => {
+    const gate = createGate();
+    const errors: ErrorInfo[] = [];
+    let isFirstFetch = true;
+    const fakeFetch: typeof fetch = async () => {
+      if (isFirstFetch) {
+        isFirstFetch = false;
+        await gate.opened;
+        throw new TypeError('Failed to fetch');
+      }
+      return new Response();
+    };
+    const recorder = createRecorder({
+      fetch: fakeFetch,
+      batch: { flushAt: 2 },
+      onError: (info) => errors.push(info),
+    });
+
+    // flushAt 2 + default multiplier 2 = cap 4. #1-2 trigger a flush that drains
+    // into the held POST; #3-6 refill the buffer to the cap of 4. Releasing the
+    // gate fails that POST, so re-adding #1-2 finds no room and drops both.
+    for (let i = 1; i <= 6; i++) {
+      recorder.record(makeImpressionEvent({ featureName: `flag-${i}` }));
+    }
+    gate.open();
+    await new Promise<void>((resolve) => setImmediate(resolve)); // wait for event loop tick
+
+    expect(errors).toMatchObject([{ reason: 'queueFull', droppedEventCount: 2 }]);
+
+    await recorder.close();
   });
 
   it('ignores record and flush calls after close', async () => {

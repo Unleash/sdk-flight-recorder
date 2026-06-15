@@ -1,13 +1,7 @@
 export type AddResult = 'added' | 'duplicate' | 'overflow';
 
-// A drained event is the buffered event flattened with the number of times it
-// was recorded in the window. `occurrenceCount` is 1 when no duplicates were seen.
-export type DrainedEvent<T> = T & { occurrenceCount: number };
-
-export class EventBuffer<T extends object> {
-  // Storage holds the count *beside* the event (not on it) so a duplicate can
-  // bump the counter in place — no per-duplicate re-spread on the hot path.
-  private readonly events = new Map<string, { event: T; occurrenceCount: number }>();
+export class EventBuffer<T extends { occurrenceCount: number }> {
+  private readonly events = new Map<string, T>();
   private readonly maxSize: number | undefined;
   private readonly dedupKey: (event: T) => string;
 
@@ -20,25 +14,26 @@ export class EventBuffer<T extends object> {
     return this.events.size;
   }
 
+  // The stored event carries its own `occurrenceCount`. A collision folds the
+  // incoming count into the buffered event in place — no re-allocation, and a
+  // fresh record (count 1) and a re-added batch (count N) merge the same way.
+  // Storing the event as-is means `drain()` needs no per-event spread.
   add(event: T): AddResult {
     const key = this.dedupKey(event);
     const entry = this.events.get(key);
     if (entry !== undefined) {
-      entry.occurrenceCount++;
+      entry.occurrenceCount += event.occurrenceCount;
       return 'duplicate';
     }
     if (this.maxSize !== undefined && this.events.size >= this.maxSize) {
       return 'overflow';
     }
-    this.events.set(key, { event, occurrenceCount: 1 });
+    this.events.set(key, event);
     return 'added';
   }
 
-  drain(): DrainedEvent<T>[] {
-    const result = Array.from(this.events.values(), ({ event, occurrenceCount }) => ({
-      ...event,
-      occurrenceCount,
-    }));
+  drain(): T[] {
+    const result = Array.from(this.events.values());
     this.events.clear();
     return result;
   }

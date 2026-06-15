@@ -1,5 +1,5 @@
 import type { Clock } from './clock.js';
-import { type DrainedEvent, EventBuffer } from './event-buffer.js';
+import { EventBuffer } from './event-buffer.js';
 import type { HttpClient } from './http-client.js';
 import { toNdjson } from './ndjson.js';
 import type { Scheduler } from './scheduler.js';
@@ -28,22 +28,23 @@ export type AdminEvent = {
   payload?: Record<string, unknown>;
 };
 
-// What the buffer holds: a recorded event plus the `timestamp` that `record()` stamps on it.
-export type StampedEvent = (ImpressionEvent | CustomEvent | AdminEvent) & { timestamp: string };
+// What the buffer holds and the wire carries: a recorded event that `record()`
+// has stamped with `timestamp` and `occurrenceCount` (1 at first sight). The
+// buffer folds duplicates' counts into the first-seen event in place, so the
+// stored object is already the wire shape — no transform at drain.
+export type WireEvent = (ImpressionEvent | CustomEvent | AdminEvent) & {
+  timestamp: string;
+  occurrenceCount: number;
+};
 
-// What the wire carries: a StampedEvent enriched at drain time with its occurrenceCount.
-export type WireEvent = DrainedEvent<StampedEvent>;
-
-export type ErrorInfo =
-  | { reason: 'persistentFailure'; droppedEventCount: number; error: unknown }
-  | { reason: 'queueFull'; droppedEventCount: number };
+export type ErrorInfo = { reason: 'queueFull'; droppedEventCount: number };
 
 type RecorderStatus = 'open' | 'closed';
 
 export const DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER = 2;
 
-export const createRecorderBuffer = (options: { maxSize: number }): EventBuffer<StampedEvent> =>
-  new EventBuffer<StampedEvent>({ maxSize: options.maxSize, dedupKey: semanticEventKey });
+export const createRecorderBuffer = (options: { maxSize: number }): EventBuffer<WireEvent> =>
+  new EventBuffer<WireEvent>({ maxSize: options.maxSize, dedupKey: semanticEventKey });
 
 export type BatchOptions = {
   /**
@@ -70,7 +71,7 @@ export type BatchOptions = {
 
 export type FlightRecorderDeps = {
   httpClient: HttpClient;
-  buffer: EventBuffer<StampedEvent>;
+  buffer: EventBuffer<WireEvent>;
   scheduler: Scheduler;
   clock: Clock;
   flushAt: number;
@@ -84,7 +85,7 @@ export class FlightRecorder {
   private readonly clock: Clock;
   private readonly flushAt: number;
   private readonly onError: ((info: ErrorInfo) => void) | undefined;
-  private readonly buffer: EventBuffer<StampedEvent>;
+  private readonly buffer: EventBuffer<WireEvent>;
   private status: RecorderStatus = 'open';
   private sending: Promise<void> | undefined;
 
@@ -102,7 +103,7 @@ export class FlightRecorder {
 
   record(event: ImpressionEvent | CustomEvent | AdminEvent): void {
     if (this.status === 'closed') return;
-    const result = this.buffer.add({ ...event, timestamp: this.clock.now() });
+    const result = this.buffer.add({ ...event, timestamp: this.clock.now(), occurrenceCount: 1 });
     if (result === 'duplicate') return;
     if (result === 'overflow') {
       this.onError?.({ reason: 'queueFull', droppedEventCount: 1 });
@@ -127,12 +128,20 @@ export class FlightRecorder {
   private async send(toSend: WireEvent[], options?: { keepalive?: boolean }): Promise<void> {
     try {
       await this.httpClient.post(toNdjson(toSend), { keepalive: options?.keepalive });
-    } catch (err) {
-      this.onError?.({
-        reason: 'persistentFailure',
-        droppedEventCount: toSend.length,
-        error: err,
-      });
+    } catch {
+      this.requeue(toSend);
+    }
+  }
+
+  private requeue(events: WireEvent[]): void {
+    let droppedEventCount = 0;
+    for (const event of events) {
+      if (this.buffer.add(event) === 'overflow') {
+        droppedEventCount++;
+      }
+    }
+    if (droppedEventCount > 0) {
+      this.onError?.({ reason: 'queueFull', droppedEventCount });
     }
   }
 

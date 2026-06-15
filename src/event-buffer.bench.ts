@@ -8,10 +8,12 @@ import { semanticEventKey } from './semantic-event-key.js';
 // code — it lives in this bench file, not in src/semantic-event-key.ts. A
 // function replacer forces V8 off its fast-path serializer and is invoked
 // once per property of the whole event graph; that is what this measures.
-const replacerSemanticEventKey = (event: ImpressionEvent): string =>
+type BenchEvent = ImpressionEvent & { occurrenceCount: number };
+
+const replacerSemanticEventKey = (event: BenchEvent): string =>
   JSON.stringify(event, (k, v) => (k === 'timestamp' ? undefined : v));
 
-const makeEvent = (i: number): ImpressionEvent => ({
+const makeEvent = (i: number): BenchEvent => ({
   eventType: 'isEnabled',
   context: {
     userId: `user-${i}`,
@@ -22,22 +24,20 @@ const makeEvent = (i: number): ImpressionEvent => ({
   },
   enabled: true,
   featureName: `feature-flag-${i % 50}`,
+  occurrenceCount: 1,
 });
 
 // One flush window's worth of distinct impression events, built once.
 const distinct = Array.from({ length: 10_000 }, (_, i) => makeEvent(i));
 
 // A re-render-style burst: the same 50 events repeated to 10k (95% duplicates).
-const withDuplicates = Array.from(
-  { length: 10_000 },
-  (_, i) => distinct[i % 50] as ImpressionEvent,
-);
+const withDuplicates = Array.from({ length: 10_000 }, (_, i) => distinct[i % 50] as BenchEvent);
 
 const runBufferCycle = (
-  dedupKey: (event: ImpressionEvent) => string,
-  events: readonly ImpressionEvent[],
+  dedupKey: (event: BenchEvent) => string,
+  events: readonly BenchEvent[],
 ): void => {
-  const buffer = new EventBuffer<ImpressionEvent>({ dedupKey });
+  const buffer = new EventBuffer<BenchEvent>({ dedupKey });
   for (const event of events) {
     buffer.add(event);
   }

@@ -72,7 +72,10 @@ export const createFlightRecorder = (options: FlightRecorderOptions): FlightReco
       'content-type': 'application/ndjson',
       authorization: options.clientKey,
     },
-    fetch: options.fetch ?? globalThis.fetch,
+    // Bind to globalThis: browsers' Window.fetch throws "Can only call
+    // Window.fetch on instances of Window" when invoked detached, and ky calls
+    // the injected fetch as a bare reference.
+    fetch: (options.fetch ?? globalThis.fetch).bind(globalThis),
     retries: options.retry?.retries ?? DEFAULT_RETRY.retries,
     compress: options.compress,
   });

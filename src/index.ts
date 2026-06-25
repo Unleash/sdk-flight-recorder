@@ -72,7 +72,7 @@ export const createFlightRecorder = (options: FlightRecorderOptions): FlightReco
       'content-type': 'application/ndjson',
       authorization: options.clientKey,
     },
-    fetch: options.fetch ?? globalThis.fetch,
+    fetch: (options.fetch ?? globalThis.fetch).bind(globalThis),
     retries: options.retry?.retries ?? DEFAULT_RETRY.retries,
     compress: options.compress,
   });

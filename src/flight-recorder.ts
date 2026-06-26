@@ -1,6 +1,6 @@
 import type { Clock } from './clock.js';
 import { EventBuffer } from './event-buffer.js';
-import type { HttpClient } from './http-client.js';
+import { type HttpClient, HttpResponseError } from './http-client.js';
 import { toNdjson } from './ndjson.js';
 import type { Scheduler } from './scheduler.js';
 import { semanticEventKey } from './semantic-event-key.js';
@@ -37,11 +37,16 @@ export type WireEvent = (ImpressionEvent | CustomEvent | AdminEvent) & {
   occurrenceCount: number;
 };
 
-export type ErrorInfo = { reason: 'queueFull'; droppedEventCount: number };
+export type ErrorInfo =
+  | { reason: 'queueFull'; droppedEventCount: number }
+  | { reason: 'clientError'; status: number; droppedEventCount: number };
 
 type RecorderStatus = 'open' | 'closed';
 
 export const DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER = 2;
+
+const isClientError = (error: unknown): error is HttpResponseError =>
+  error instanceof HttpResponseError && error.status >= 400 && error.status < 500;
 
 export const createRecorderBuffer = (options: { maxSize: number }): EventBuffer<WireEvent> =>
   new EventBuffer<WireEvent>({ maxSize: options.maxSize, dedupKey: semanticEventKey });
@@ -128,7 +133,15 @@ export class FlightRecorder {
   private async send(toSend: WireEvent[], options?: { keepalive?: boolean }): Promise<void> {
     try {
       await this.httpClient.post(toNdjson(toSend), { keepalive: options?.keepalive });
-    } catch {
+    } catch (error) {
+      if (isClientError(error)) {
+        this.onError?.({
+          reason: 'clientError',
+          status: error.status,
+          droppedEventCount: toSend.length,
+        });
+        return;
+      }
       this.requeue(toSend);
     }
   }

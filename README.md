@@ -87,9 +87,10 @@ and would defeat the server's batched ingest path.
 - Periodic flush + size-based flush, whichever fires first
 - Single POST per flush; body is the full batch as NDJSON
 - gzip on the body by default (cuts wire bytes ~5–10× on JSON)
-- Retry transport errors only; drop on persistent failure, surface via
-  `onError({ reason: 'persistentFailure' })` — no on-disk persistence, no
-  infinite retry queue
+- Retry transient failures (network errors, 5xx) by re-queuing the batch for the
+  next flush; drop a batch the server rejects with a 4xx and surface it via
+  `onError({ reason: 'clientError' })` — no on-disk persistence, no infinite
+  retry queue
 - `record()` never throws
 
 **Default batch size is large by design.** `flushAt: 10_000` trades higher
@@ -106,27 +107,40 @@ mobile), lower `flushAt` — `flushAt: 100` drops peak memory roughly 100×.
 
 `record()` and `flush()` never throw — the recorder is best-effort, and a flush
 failure must not break the code path that produced the event. Failures are
-reported through the optional `onError` callback.
+reported through the optional `onError` callback, which receives an `ErrorInfo`
+discriminated on `reason` (both variants carry `droppedEventCount`):
 
-It receives an `ErrorInfo` with `reason: 'persistentFailure'` when a flush POST
-fails after all retries and the batch is dropped — carrying `droppedEventCount`
-and the underlying `error`:
+| `reason`      | When                                                                           | Extra fields          |
+| ------------- | ------------------------------------------------------------------------------ | --------------------- |
+| `queueFull`   | The buffer is at capacity, so a new (or re-queued) event is dropped.           | —                     |
+| `clientError` | The server rejected a batch with a 4xx; resending can't help, so it's dropped. | `status`              |
+
+Transient failures (network errors, 5xx) are **not** surfaced: the batch is
+re-queued and retried on the next flush, so a brief outage is invisible; only a
+sustained one fills the buffer and surfaces as `queueFull`.
 
 ```ts
 createFlightRecorder({
   url: 'https://ingest.example.com/events',
   clientKey: 'your-ingestion-token',
   onError: (info) => {
-    if (info.reason === 'persistentFailure') {
-      console.warn(`flight recorder dropped ${info.droppedEventCount} events`, info.error);
+    switch (info.reason) {
+      case 'queueFull':
+        console.warn(`flight recorder buffer full, dropped ${info.droppedEventCount} events`);
+        break;
+      case 'clientError':
+        console.warn(
+          `flight recorder batch rejected (${info.status}), dropped ${info.droppedEventCount} events`,
+        );
+        break;
     }
   },
 });
 ```
 
-Dropped events are gone: the recorder does not retry beyond `retry.retries`, and
-the buffer does not survive a restart. Telemetry loss is acceptable by design;
-`onError` is for surfacing it to your metrics or logs, not for recovery.
+Dropped events are gone — the buffer holds them only until the cap and does not
+survive a restart. Telemetry loss is acceptable by design; `onError` is for
+surfacing it to your metrics or logs, not for recovery.
 
 ## API
 

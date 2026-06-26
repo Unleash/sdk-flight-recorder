@@ -362,6 +362,33 @@ describe('FlightRecorder', () => {
     expect(errors).toEqual([]);
   });
 
+  it('does not retry a batch the server rejected with a client error', async () => {
+    let fetchCalls = 0;
+    const fakeFetch: typeof fetch = async () => {
+      fetchCalls++;
+      return new Response(null, { status: 400 });
+    };
+    const recorder = createRecorder({ fetch: fakeFetch });
+
+    recorder.record(makeImpressionEvent());
+    await recorder.flush();
+    await recorder.flush();
+
+    expect(fetchCalls).toBe(1);
+  });
+
+  it('reports the dropped events when the server rejects a batch with a client error', async () => {
+    const errors: ErrorInfo[] = [];
+    const fakeFetch: typeof fetch = async () => new Response(null, { status: 400 });
+    const recorder = createRecorder({ fetch: fakeFetch, onError: (info) => errors.push(info) });
+
+    recorder.record(makeImpressionEvent({ featureName: 'a' }));
+    recorder.record(makeImpressionEvent({ featureName: 'b' }));
+    await recorder.flush();
+
+    expect(errors).toMatchObject([{ reason: 'clientError', status: 400, droppedEventCount: 2 }]);
+  });
+
   it("an evaluation's occurrence count is continuous across a failed flush", async () => {
     const snapshots: Array<Promise<RequestSnapshot>> = [];
     let isFirstFetch = true;

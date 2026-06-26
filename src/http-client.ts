@@ -1,9 +1,16 @@
-import ky from 'ky';
+import ky, { HTTPError } from 'ky';
 import { gzip } from './gzip.js';
 
 export type HttpClient = {
   post(body: string, postOptions?: { keepalive?: boolean }): Promise<void>;
 };
+
+export class HttpResponseError extends Error {
+  constructor(readonly status: number) {
+    super(`request failed with status ${status}`);
+    this.name = 'HttpResponseError';
+  }
+}
 
 export type HttpClientOptions = {
   url: string;
@@ -31,18 +38,25 @@ export const createHttpClient = (options: HttpClientOptions): HttpClient => {
   const shouldCompress = options.compress ?? true;
   return {
     post: async (body, postOptions) => {
-      if (shouldCompress) {
+      try {
+        if (shouldCompress) {
+          await client.post(options.url, {
+            body: await gzip(body),
+            headers: { 'content-encoding': 'gzip' },
+            keepalive: postOptions?.keepalive,
+          });
+          return;
+        }
         await client.post(options.url, {
-          body: await gzip(body),
-          headers: { 'content-encoding': 'gzip' },
+          body,
           keepalive: postOptions?.keepalive,
         });
-        return;
+      } catch (error) {
+        if (error instanceof HTTPError) {
+          throw new HttpResponseError(error.response.status);
+        }
+        throw error;
       }
-      await client.post(options.url, {
-        body,
-        keepalive: postOptions?.keepalive,
-      });
     },
   };
 };

@@ -88,7 +88,8 @@ and would defeat the server's batched ingest path.
 - Single POST per flush; body is the full batch as NDJSON
 - gzip on the body by default (cuts wire bytes ~5–10× on JSON)
 - Retry transient failures (network errors, 5xx) by re-queuing the batch for the
-  next flush; drop a batch the server rejects with a 4xx and surface it via
+  next flush, surfacing each via `onError({ reason: 'deliveryFailed' })`; drop a
+  batch the server rejects with a 4xx and surface it via
   `onError({ reason: 'clientError' })` — no on-disk persistence, no infinite
   retry queue
 - `record()` never throws
@@ -108,16 +109,19 @@ mobile), lower `flushAt` — `flushAt: 100` drops peak memory roughly 100×.
 `record()` and `flush()` never throw — the recorder is best-effort, and a flush
 failure must not break the code path that produced the event. Failures are
 reported through the optional `onError` callback, which receives an `ErrorInfo`
-discriminated on `reason` (both variants carry `droppedEventCount`):
+discriminated on `reason`:
 
-| `reason`      | When                                                                           | Extra fields          |
-| ------------- | ------------------------------------------------------------------------------ | --------------------- |
-| `queueFull`   | The buffer is at capacity, so a new (or re-queued) event is dropped.           | —                     |
-| `clientError` | The server rejected a batch with a 4xx; resending can't help, so it's dropped. | `status`              |
+| `reason`         | When                                                                           | Extra fields                                          |
+| ---------------- | ------------------------------------------------------------------------------ | ----------------------------------------------------- |
+| `queueFull`      | The buffer is at capacity, so a new (or re-queued) event is dropped.           | `droppedEventCount`                                   |
+| `clientError`    | The server rejected a batch with a 4xx; resending can't help, so it's dropped. | `status`, `droppedEventCount`                         |
+| `deliveryFailed` | A flush failed (network error, or a 5xx response); the batch is re-queued.     | `status` (5xx only), `error`, `requeuedEventCount`    |
 
-Transient failures (network errors, 5xx) are **not** surfaced: the batch is
-re-queued and retried on the next flush, so a brief outage is invisible; only a
-sustained one fills the buffer and surfaces as `queueFull`.
+`deliveryFailed` events are **not lost** — the batch is re-queued and retried on
+the next flush. `status` is present when the failure was an HTTP 5xx response
+and absent for status-less failures (DNS, offline, connection refused); `error`
+carries the underlying failure either way. A sustained outage produces a
+`deliveryFailed` per flush and eventually `queueFull` once the buffer fills.
 
 ```ts
 createFlightRecorder({
@@ -131,6 +135,11 @@ createFlightRecorder({
       case 'clientError':
         console.warn(
           `flight recorder batch rejected (${info.status}), dropped ${info.droppedEventCount} events`,
+        );
+        break;
+      case 'deliveryFailed':
+        console.warn(
+          `flight recorder delivery failed${info.status ? ` (${info.status})` : ''}, retrying ${info.requeuedEventCount} events`,
         );
         break;
     }

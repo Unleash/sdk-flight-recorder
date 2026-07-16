@@ -336,14 +336,15 @@ describe('FlightRecorder', () => {
     ]);
   });
 
-  it('events from a failed flush are retried on the next flush without surfacing an error', async () => {
+  it('a failed delivery is reported through onError and its events are retried on the next flush', async () => {
     const snapshots: Array<Promise<RequestSnapshot>> = [];
     const errors: ErrorInfo[] = [];
     let isFirstFetch = true;
+    const networkError = new TypeError('Failed to fetch');
     const fakeFetch: typeof fetch = async (input) => {
       if (isFirstFetch) {
         isFirstFetch = false;
-        throw new TypeError('Failed to fetch');
+        throw networkError;
       }
       snapshots.push(snapshotRequest(input as Request));
       return new Response();
@@ -359,7 +360,22 @@ describe('FlightRecorder', () => {
 
     const events = await recordedEvents(snapshots);
     expect(events).toMatchObject([{ featureName: 'failed' }, { featureName: 'next' }]);
-    expect(errors).toEqual([]);
+    expect(errors).toEqual([
+      { reason: 'deliveryFailed', error: networkError, requeuedEventCount: 1 },
+    ]);
+  });
+
+  it('a server error response is reported with its HTTP status', async () => {
+    const errors: ErrorInfo[] = [];
+    const fakeFetch: typeof fetch = async () => new Response(null, { status: 503 });
+    const recorder = createRecorder({ fetch: fakeFetch, onError: (info) => errors.push(info) });
+
+    recorder.record(makeImpressionEvent());
+    await recorder.flush();
+
+    expect(errors).toMatchObject([
+      { reason: 'deliveryFailed', status: 503, requeuedEventCount: 1 },
+    ]);
   });
 
   it('does not retry a batch the server rejected with a client error', async () => {
@@ -440,7 +456,10 @@ describe('FlightRecorder', () => {
     gate.open();
     await new Promise<void>((resolve) => setImmediate(resolve)); // wait for event loop tick
 
-    expect(errors).toMatchObject([{ reason: 'queueFull', droppedEventCount: 2 }]);
+    expect(errors).toMatchObject([
+      { reason: 'deliveryFailed', requeuedEventCount: 2 },
+      { reason: 'queueFull', droppedEventCount: 2 },
+    ]);
 
     await recorder.close();
   });
@@ -472,7 +491,10 @@ describe('FlightRecorder', () => {
     gate.open();
     await new Promise<void>((resolve) => setImmediate(resolve)); // wait for event loop tick
 
-    expect(errors).toMatchObject([{ reason: 'queueFull', droppedEventCount: 1 }]);
+    expect(errors).toMatchObject([
+      { reason: 'deliveryFailed', requeuedEventCount: 2 },
+      { reason: 'queueFull', droppedEventCount: 1 },
+    ]);
 
     await recorder.close();
   });

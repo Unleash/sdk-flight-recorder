@@ -39,7 +39,8 @@ export type WireEvent = (ImpressionEvent | CustomEvent | AdminEvent) & {
 
 export type ErrorInfo =
   | { reason: 'queueFull'; droppedEventCount: number }
-  | { reason: 'clientError'; status: number; droppedEventCount: number };
+  | { reason: 'clientError'; status: number; droppedEventCount: number }
+  | { reason: 'deliveryFailed'; status?: number; error: unknown; requeuedEventCount: number };
 
 type RecorderStatus = 'open' | 'closed';
 
@@ -142,6 +143,12 @@ export class FlightRecorder {
         });
         return;
       }
+      this.onError?.({
+        reason: 'deliveryFailed',
+        ...(error instanceof HttpResponseError ? { status: error.status } : {}),
+        error,
+        requeuedEventCount: toSend.length,
+      });
       this.requeue(toSend);
     }
   }

@@ -58,6 +58,22 @@ describe('HttpClient', () => {
     await expect(client.post('body')).rejects.toMatchObject({ status: 400 });
   });
 
+  it('network failures propagate the underlying error, not the transport wrapper', async () => {
+    const networkError = new TypeError('Failed to fetch');
+    const fakeFetch: typeof fetch = async () => {
+      throw networkError;
+    };
+
+    const client = createHttpClient({
+      url: defaultUrl,
+      headers: {},
+      fetch: fakeFetch,
+      retries: 0,
+    });
+
+    await expect(client.post('body')).rejects.toBe(networkError);
+  });
+
   it('retries POST requests when retries is configured', async () => {
     let attemptCount = 0;
     const fakeFetch: typeof fetch = async () => {

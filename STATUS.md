@@ -2,7 +2,7 @@
 
 Snapshot of where the port stands. **This file goes stale fast** — update it each TDD step or treat it as a handoff snapshot only.
 
-Last updated: 2026-06-26 (a 4xx-rejected batch is now dropped and surfaced as `onError({ reason: 'clientError', status, droppedEventCount })` instead of cycling forever; network/5xx still re-queue. `http-client.ts` wraps ky's `HTTPError` in a domain `HttpResponseError`; `ErrorInfo` became a `queueFull | clientError` union; README error-handling docs corrected — the old `persistentFailure` reason never shipped). Earlier: `EventBuffer` now stores the wire shape directly — `occurrenceCount` lives on the event, stamped at `record()` time; `add(event)` folds counts in place, `drain()` returns stored objects with no spread, `DrainedEvent<T>` removed (~1.13× on the distinct bench). Earlier same-day: failed flushes retry by re-adding the drained batch; `ErrorInfo` simplified to just `queueFull`; `persistentFailure`/`restore()` removed)
+Last updated: 2026-07-15 (every failed delivery on the retry path now surfaces as `onError({ reason: 'deliveryFailed', status?, error, requeuedEventCount })` before the batch re-queues — `status` present for 5xx, absent for network errors; `ErrorInfo` is now a `queueFull | clientError | deliveryFailed` union; the `error` field is the raw underlying failure — `http-client.ts` unwraps ky v2's `NetworkError` wrapper via `.cause` so no ky object reaches user space). Earlier 2026-06-26: (a 4xx-rejected batch is now dropped and surfaced as `onError({ reason: 'clientError', status, droppedEventCount })` instead of cycling forever; network/5xx still re-queue. `http-client.ts` wraps ky's `HTTPError` in a domain `HttpResponseError`; `ErrorInfo` became a `queueFull | clientError` union; README error-handling docs corrected — the old `persistentFailure` reason never shipped). Earlier: `EventBuffer` now stores the wire shape directly — `occurrenceCount` lives on the event, stamped at `record()` time; `add(event)` folds counts in place, `drain()` returns stored objects with no spread, `DrainedEvent<T>` removed (~1.13× on the distinct bench). Earlier same-day: failed flushes retry by re-adding the drained batch; `ErrorInfo` simplified to just `queueFull`; `persistentFailure`/`restore()` removed)
 
 ## What's built
 
@@ -13,10 +13,10 @@ Last updated: 2026-06-26 (a 4xx-rejected batch is now dropped and surfaced as `o
 - `FlightRecorder` with explicit DI: `{ url, clientKey, fetch, scheduler, clock, batch, retry?, onError? }`. Collaborators required (no defaults); `batch` is required but only its `flushAt` is required-within (`maxBufferSizeMultiplier` defaults to `DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER` = 2, `flushAfterMs` optional — JSDoc on each); `retry?: { retries }` and `onError` opt-in. Only retry knob is `retries` — backoff/cap/status-codes/timeout all use ky's defaults.
 - Constructor builds an `HttpClient` once and schedules `scheduler.runEvery(flushAfterMs, () => this.flush())` when `flushAfterMs` is set. The scheduler is contractually required to await the handler before the next tick — so periodic flushes naturally serialize.
 - `record(event)` — delegates to `this.buffer.add()`; responds to `AddResult`: duplicate → silent return, overflow → `onError('queueFull')`, added → check `flushAt` trigger. No-op if closed.
-- `flush()` — no-op if closed; `if (this.sending) await this.sending;` gate; then drains the whole buffer, posts via `httpClient`, stores the send in `this.sending` (cleared in `.finally`). The post body work lives in a small private `send(toSend, options)` method so `flush()` stays gate/drain shaped. `onError` fires on persistent failure.
+- `flush()` — no-op if closed; `if (this.sending) await this.sending;` gate; then drains the whole buffer, posts via `httpClient`, stores the send in `this.sending` (cleared in `.finally`). The post body work lives in a small private `send(toSend, options)` method so `flush()` stays gate/drain shaped. A 4xx drops the batch (`clientError`); any other failure reports `deliveryFailed` and re-queues.
 - `close()` — `await scheduler.stop()` (resolves after any in-flight periodic handler settles), runs a final `flush({ keepalive: true })`, then marks status closed (status flip after the flush so its own guard doesn't skip the drain).
 - **`this.sending` gate** — `private sending: Promise<void> | undefined`. Every `flush()` (manual, periodic, size-trigger) awaits it once, so at most one POST is on the wire at any time. A plain `if` is enough because the drain is atomic — concurrent callers wake to an empty buffer (or only what `record()` added during the send) and either return or start one new send.
-- Types: `ImpressionEvent` (discriminated by `eventType: 'isEnabled' | 'getVariant'`), `CustomEvent` (`eventType: 'custom'`, `context`, `eventName: string`, `payload?: Record<string, unknown>`), `AdminEvent` (same shape as `CustomEvent`, `eventType: 'admin'`). The recorder stamps `timestamp` internally via the injected `Clock`. `ErrorInfo` is a discriminated union on `reason`: `{ reason: 'queueFull'; droppedEventCount }` (local capacity) and `{ reason: 'clientError'; status; droppedEventCount }` (a 4xx-rejected batch, dropped). Transient failures (network/5xx) retry internally and surface nothing. `BatchOptions` is `{ flushAt: number; maxBufferSizeMultiplier?: number; flushAfterMs?: number }` — `DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER` (= 2) is exported alongside the type.
+- Types: `ImpressionEvent` (discriminated by `eventType: 'isEnabled' | 'getVariant'`), `CustomEvent` (`eventType: 'custom'`, `context`, `eventName: string`, `payload?: Record<string, unknown>`), `AdminEvent` (same shape as `CustomEvent`, `eventType: 'admin'`). The recorder stamps `timestamp` internally via the injected `Clock`. `ErrorInfo` is a discriminated union on `reason`: `{ reason: 'queueFull'; droppedEventCount }` (local capacity), `{ reason: 'clientError'; status; droppedEventCount }` (a 4xx-rejected batch, dropped), and `{ reason: 'deliveryFailed'; status?; error; requeuedEventCount }` (network/5xx — reported, then re-queued and retried; `status` only when the failure was an HTTP response). `BatchOptions` is `{ flushAt: number; maxBufferSizeMultiplier?: number; flushAfterMs?: number }` — `DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER` (= 2) is exported alongside the type.
 
 `src/http-client.ts`
 - `createHttpClient({ url, headers, fetch, retries }): HttpClient`. Single method: `post(body: string): Promise<void>`. Wraps ky (retry/methods/headers/fetch). The only module that imports `ky`.
@@ -33,9 +33,9 @@ Last updated: 2026-06-26 (a 4xx-rejected batch is now dropped and surfaced as `o
 `src/ndjson.ts`
 - `toNdjson(items: ReadonlyArray<unknown>): string` — generic NDJSON serializer. One JSON object per line, trailing `\n`. Returns `''` for empty input (the recorder's `flush` already guards against calling it that way, but the function handles it safely).
 
-## Tests (44 passing)
+## Tests (52 passing)
 
-`src/flight-recorder.test.ts` (16 tests — no ky backoff at this seam)
+`src/flight-recorder.test.ts` (20 tests — no ky backoff at this seam; bullet list below may lag a few tests)
 - `'throws when batch.flushAt is not provided'` — runtime guard for JS callers; type already requires it.
 - `'throws when batch.maxBufferSizeMultiplier is less than 1'` — runtime guard; types can't constrain `number >= 1`.
 - `'can flush with no events'` — empty-buffer guard.
@@ -47,15 +47,16 @@ Last updated: 2026-06-26 (a 4xx-rejected batch is now dropped and surfaced as `o
 - `'ships impression, custom, and admin events in one batch'` — heterogeneous NDJSON body; pins custom- and admin-event wire shapes.
 - `'sends custom events with the same eventName but different payloads separately'` — dedup distinguishes by `eventName` + `payload`.
 - `'duplicate events recorded within one flush window reach the wire only once'` — both impressions and custom events.
-- `'events from a failed flush are retried on the next flush'` — first POST fails, second succeeds; the failed batch is restored and ships alongside the next event.
+- `'a failed delivery is reported through onError and its events are retried on the next flush'` — first POST fails (network error, no status key on the info), second succeeds; the failed batch is restored and ships alongside the next event, and the failure surfaces as `deliveryFailed` with the raw underlying error.
+- `'a server error response is reported with its HTTP status'` — a 5xx surfaces as `deliveryFailed` with `status` present and the batch re-queued.
 - `'a repeat of a failed evaluation increments its count instead of shipping twice'` — pins the accepted dedup tradeoff: a restored event collapses with a later identical eval into one wire entry, `occurrenceCount: 2`.
-- `'events that fail to send are dropped only once the buffer is full'` — `retry: { retries: 0 }`; a held-then-failed POST re-adds into a buffer refilled to cap, so both events overflow and fire a single `queueFull` (`droppedEventCount: 2`) for the batch.
+- `'events that fail to send are dropped only once the buffer is full'` — `retry: { retries: 0 }`; a held-then-failed POST re-adds into a buffer refilled to cap, so both events overflow and fire a `deliveryFailed` (`requeuedEventCount: 2`) followed by a single `queueFull` (`droppedEventCount: 2`) for the batch.
 - `'ignores record and flush calls after close'` — neither path hits the network after `close()`.
 - `'sends remaining events with keepalive on close'` — `close()` flushes pending with `keepalive: true`.
 - `'flushes pending events and stops the periodic flush on close'` — `close()` flushes pending + transitions scheduler to `'stopped'`.
 
-`src/http-client.test.ts` (3 tests — backoff bypassed via `retryDelay: () => 0`)
-- Keepalive forwarding, gzip + content-encoding by default, retries-when-configured (covers ky `limit: options.retries` + `methods: ['post']`).
+`src/http-client.test.ts` (5 tests — backoff bypassed via `retryDelay: () => 0`)
+- Keepalive forwarding, gzip + content-encoding by default, retries-when-configured (covers ky `limit: options.retries` + `methods: ['post']`), error-status → `HttpResponseError`, network failures propagate the underlying error (ky's `NetworkError` wrapper unwrapped via `.cause`).
 
 `src/event-buffer.test.ts` (3 tests)
 - Buffer add/duplicate/overflow + drain-resets-window behavior in isolation.

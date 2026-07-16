@@ -1,4 +1,4 @@
-import ky, { HTTPError } from 'ky';
+import ky, { HTTPError, NetworkError } from 'ky';
 import { gzip } from './gzip.js';
 
 export type HttpClient = {
@@ -54,6 +54,10 @@ export const createHttpClient = (options: HttpClientOptions): HttpClient => {
       } catch (error) {
         if (error instanceof HTTPError) {
           throw new HttpResponseError(error.response.status);
+        }
+        // don't leak out ky errors to the rest of the code
+        if (error instanceof NetworkError) {
+          throw error.cause;
         }
         throw error;
       }

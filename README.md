@@ -69,6 +69,10 @@ with exponential backoff.
 
 **`fetch`** — function. Custom fetch implementation (defaults to `globalThis.fetch`).
 
+**`hashContextFields`** — string array, default `[]`. Context fields, e.g.
+`['email']`, replaced by their SHA-256 hex before leaving the process. Flags
+still evaluate on the real value. Non-string values pass through.
+
 A browser caller that bursts past ~180 events between flushes should lower
 `batch.flushAt` — a large keepalive flush on `close()` exceeds the 64 KB limit.
 (Compression helps here: gzipped batches typically fit even at higher event

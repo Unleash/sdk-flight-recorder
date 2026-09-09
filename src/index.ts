@@ -52,6 +52,9 @@ export type FlightRecorderOptions = {
   // helpful for keepalive (browser 64 KB limit) and any cellular/metered
   // network. Set to false only when wire-level inspection is needed.
   compress?: boolean;
+  // Lets callers evaluate flags on the real identifier while only its
+  // sha256 hex leaves the process.
+  hashContextFields?: readonly string[];
 };
 
 // Composition root: wires the production collaborators — the global fetch
@@ -85,5 +88,6 @@ export const createFlightRecorder = (options: FlightRecorderOptions): FlightReco
     flushAt: batch.flushAt,
     flushAfterMs: batch.flushAfterMs,
     onError: options.onError,
+    hashContextFields: options.hashContextFields,
   });
 };

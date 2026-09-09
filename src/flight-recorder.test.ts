@@ -499,6 +499,32 @@ describe('FlightRecorder', () => {
     await recorder.close();
   });
 
+  it('a context field named in hashContextFields reaches the wire as its sha256 hex', async () => {
+    const snapshots: Array<Promise<RequestSnapshot>> = [];
+    const fakeFetch: typeof fetch = async (input) => {
+      snapshots.push(snapshotRequest(input as Request));
+      return new Response();
+    };
+    const recorder = createRecorder({ fetch: fakeFetch, hashContextFields: ['email'] });
+
+    recorder.record(
+      makeImpressionEvent({ context: { email: 'user@example.com', userId: 'user-1' } }),
+    );
+    recorder.record(makeImpressionEvent({ context: { userId: 'user-2' } }));
+    await recorder.flush();
+
+    const events = await recordedEvents(snapshots);
+    expect(events).toMatchObject([
+      {
+        context: {
+          email: 'b4c9a289323b21a01c3e940f150eb9b8c542587f1abfd8f0e1cc1ffc5e475514',
+          userId: 'user-1',
+        },
+      },
+      { context: { userId: 'user-2' } },
+    ]);
+  });
+
   it('ignores record and flush calls after close', async () => {
     let fetchCalls = 0;
     const fakeFetch: typeof fetch = async () => {

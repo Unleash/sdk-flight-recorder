@@ -4,6 +4,7 @@ import { type HttpClient, HttpResponseError } from './http-client.js';
 import { toNdjson } from './ndjson.js';
 import type { Scheduler } from './scheduler.js';
 import { semanticEventKey } from './semantic-event-key.js';
+import { sha256Hex } from './sha256.js';
 
 export type ImpressionEvent = {
   eventType: 'isEnabled' | 'getVariant';
@@ -83,6 +84,18 @@ export type FlightRecorderDeps = {
   flushAt: number;
   flushAfterMs?: number;
   onError?: (info: ErrorInfo) => void;
+  hashContextFields?: readonly string[];
+};
+
+type RecordedEvent = ImpressionEvent | CustomEvent | AdminEvent;
+
+const hashFields = (context: Record<string, unknown>, fields: readonly string[]) => {
+  const hashed = { ...context };
+  for (const field of fields) {
+    const value = hashed[field];
+    if (typeof value === 'string') hashed[field] = sha256Hex(value);
+  }
+  return hashed;
 };
 
 export class FlightRecorder {
@@ -92,6 +105,7 @@ export class FlightRecorder {
   private readonly flushAt: number;
   private readonly onError: ((info: ErrorInfo) => void) | undefined;
   private readonly buffer: EventBuffer<WireEvent>;
+  private readonly hashContextFields: readonly string[];
   private status: RecorderStatus = 'open';
   private sending: Promise<void> | undefined;
 
@@ -102,14 +116,20 @@ export class FlightRecorder {
     this.flushAt = deps.flushAt;
     this.buffer = deps.buffer;
     this.onError = deps.onError;
+    this.hashContextFields = deps.hashContextFields ?? [];
     if (deps.flushAfterMs !== undefined) {
       this.scheduler.runEvery(deps.flushAfterMs, () => this.flush());
     }
   }
 
-  record(event: ImpressionEvent | CustomEvent | AdminEvent): void {
+  record(event: RecordedEvent): void {
     if (this.status === 'closed') return;
-    const result = this.buffer.add({ ...event, timestamp: this.clock.now(), occurrenceCount: 1 });
+    const result = this.buffer.add({
+      ...event,
+      context: hashFields(event.context, this.hashContextFields),
+      timestamp: this.clock.now(),
+      occurrenceCount: 1,
+    });
     if (result === 'duplicate') return;
     if (result === 'overflow') {
       this.onError?.({ reason: 'queueFull', droppedEventCount: 1 });

@@ -386,13 +386,6 @@ Pinned by `'a context field named in hashContextFields reaches the wire as its s
 - *A function, not a static object:* viewport width changes during a session, and the caller decides where fields go.
 - *Before hashing:* a field the enricher adds can't leave the process raw.
 
-*Measured* (`pnpm bench`, `src/flight-recorder.bench.ts`): without the option, `record()` is unchanged against 0.9.0 — the difference is inside run-to-run noise. With an enricher adding five fields under `properties`:
-
-| Scenario | No enricher | Enricher | Time per event |
-|---|---|---|---|
-| 10k distinct events | ~1.25M events/sec | ~0.78M events/sec | 1.6× |
-| 10k events, 95% duplicates | ~1.35M events/sec | ~0.88M events/sec | 1.5× |
-
-That is about 0.4–0.5 µs more per event, paid only by callers that opt in. The ratio is the durable claim.
+*Cost* (one-off benchmark of 10k `record()` calls, not kept in the repo): without the option, `record()` is unchanged against 0.9.0. With an enricher adding five fields under `properties` it takes about 1.5× as long per event, roughly 0.4–0.5 µs more, paid only by callers that opt in.
 
 Pinned by `'each event carries the extra context supplied at the moment it was recorded'` and `'a hashed context field stays hashed when the caller supplies it as extra context'` (recorder).

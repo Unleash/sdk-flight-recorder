@@ -91,6 +91,8 @@ Each line is a future TDD step:
 - ~~**Buffer cap / `onError({ reason: 'queueFull' })`**~~ Done — `batch.maxBufferSize` drops new events and fires `onError({ reason: 'queueFull', droppedEventCount: 1 })`.
 - ~~**Dedup of identical buffered events.**~~ Done — `JSON.stringify` key, "first seen wins" per flush window, seen set cleared on splice.
 
+- ~~**Context every event should carry.**~~ Done — `enrichContext: (context) => context` runs inside `record()` before hashing; the admin UI uses it for browser and viewport. See the `DECISIONS.md` entry on context enrichment.
+
 - ~~**Hashing identifiers on the way out.**~~ Done — `hashContextFields: ['email']` replaces listed string context values with their SHA-256 hex inside `record()`, via `@noble/hashes` (sync, isomorphic, Node-parity pinned). See the `DECISIONS.md` entry on context hashing.
 
 ## Next test candidates

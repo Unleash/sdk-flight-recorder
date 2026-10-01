@@ -73,6 +73,14 @@ with exponential backoff.
 `['email']`, replaced by their SHA-256 hex before leaving the process. Flags
 still evaluate on the real value. Non-string values pass through.
 
+**`enrichContext`** — function, `(context) => context`. Returns the context an
+event ships with, e.g. adding the browser and viewport to every event. Runs
+synchronously inside `record()`, before hashing, so values reflect the moment
+the event was recorded and `hashContextFields` still applies to what it adds.
+Return a new object rather than changing the one passed in: an impression
+event carries the Unleash client's own context object, so changing it would
+change what flags are evaluated against.
+
 A browser caller that bursts past ~180 events between flushes should lower
 `batch.flushAt` — a large keepalive flush on `close()` exceeds the 64 KB limit.
 (Compression helps here: gzipped batches typically fit even at higher event

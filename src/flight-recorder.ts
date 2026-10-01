@@ -76,6 +76,8 @@ export type BatchOptions = {
   flushAfterMs?: number;
 };
 
+export type ContextEnricher = (context: Record<string, unknown>) => Record<string, unknown>;
+
 export type FlightRecorderDeps = {
   httpClient: HttpClient;
   buffer: EventBuffer<WireEvent>;
@@ -85,6 +87,7 @@ export type FlightRecorderDeps = {
   flushAfterMs?: number;
   onError?: (info: ErrorInfo) => void;
   hashContextFields?: readonly string[];
+  enrichContext?: ContextEnricher;
 };
 
 type RecordedEvent = ImpressionEvent | CustomEvent | AdminEvent;
@@ -106,6 +109,7 @@ export class FlightRecorder {
   private readonly onError: ((info: ErrorInfo) => void) | undefined;
   private readonly buffer: EventBuffer<WireEvent>;
   private readonly hashContextFields: readonly string[];
+  private readonly enrichContext: ContextEnricher;
   private status: RecorderStatus = 'open';
   private sending: Promise<void> | undefined;
 
@@ -117,6 +121,7 @@ export class FlightRecorder {
     this.buffer = deps.buffer;
     this.onError = deps.onError;
     this.hashContextFields = deps.hashContextFields ?? [];
+    this.enrichContext = deps.enrichContext ?? ((context) => context);
     if (deps.flushAfterMs !== undefined) {
       this.scheduler.runEvery(deps.flushAfterMs, () => this.flush());
     }
@@ -126,7 +131,8 @@ export class FlightRecorder {
     if (this.status === 'closed') return;
     const result = this.buffer.add({
       ...event,
-      context: hashFields(event.context, this.hashContextFields),
+      // Hash after enriching so a field the enricher adds can't leave the process raw.
+      context: hashFields(this.enrichContext(event.context), this.hashContextFields),
       timestamp: this.clock.now(),
       occurrenceCount: 1,
     });

@@ -377,3 +377,15 @@ Pinned by `'a failed delivery is reported through onError and its events are ret
 *Why dedup runs on the hashed context:* hashing happens before `buffer.add()`, so `semanticEventKey` sees the same shape that ships. Two evaluations with the same raw email collapse exactly as before; nothing about the dedup window changed.
 
 Pinned by `'a context field named in hashContextFields reaches the wire as its sha256 hex'` (recorder) and the Node-parity tests in `sha256.test.ts`.
+
+## Context every event should carry is added inside `record()` (`enrichContext`)
+
+`enrichContext: (context) => context` runs on each event's context inside `record()`, before hashing and dedup.
+
+- *The SDK, not the call sites:* same reason as `hashContextFields` — one option reaches every `record()`, including impressions that `unleash-proxy-client` builds.
+- *A function, not a static object:* viewport width changes during a session, and the caller decides where fields go.
+- *Before hashing:* a field the enricher adds can't leave the process raw.
+
+*Cost* (one-off benchmark of 10k `record()` calls, not kept in the repo): without the option, `record()` is unchanged against 0.9.0. With an enricher adding five fields under `properties` it takes about 1.5× as long per event, roughly 0.4–0.5 µs more, paid only by callers that opt in.
+
+Pinned by `'each event carries the extra context supplied at the moment it was recorded'` and `'a hashed context field stays hashed when the caller supplies it as extra context'` (recorder).

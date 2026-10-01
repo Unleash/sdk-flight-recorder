@@ -1,6 +1,7 @@
 import { type Clock, systemClock } from './clock.js';
 import {
   type BatchOptions,
+  type ContextEnricher,
   createRecorderBuffer,
   DEFAULT_MAX_BUFFER_SIZE_MULTIPLIER,
   type ErrorInfo,
@@ -14,6 +15,7 @@ import { TimerScheduler } from './timer-scheduler.js';
 export type {
   AdminEvent,
   BatchOptions,
+  ContextEnricher,
   CustomEvent,
   ErrorInfo,
   FlightRecorder,
@@ -55,6 +57,9 @@ export type FlightRecorderOptions = {
   // Lets callers evaluate flags on the real identifier while only its
   // sha256 hex leaves the process.
   hashContextFields?: readonly string[];
+  // Runs synchronously inside record(), before hashing, so values reflect
+  // the moment the event was recorded.
+  enrichContext?: ContextEnricher;
 };
 
 // Composition root: wires the production collaborators — the global fetch
@@ -89,5 +94,6 @@ export const createFlightRecorder = (options: FlightRecorderOptions): FlightReco
     flushAfterMs: batch.flushAfterMs,
     onError: options.onError,
     hashContextFields: options.hashContextFields,
+    enrichContext: options.enrichContext,
   });
 };

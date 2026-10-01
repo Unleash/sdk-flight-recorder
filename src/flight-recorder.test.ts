@@ -525,6 +525,51 @@ describe('FlightRecorder', () => {
     ]);
   });
 
+  it('each event carries the extra context supplied at the moment it was recorded', async () => {
+    const snapshots: Array<Promise<RequestSnapshot>> = [];
+    const fakeFetch: typeof fetch = async (input) => {
+      snapshots.push(snapshotRequest(input as Request));
+      return new Response();
+    };
+    let viewportWidth = 1200;
+    const recorder = createRecorder({
+      fetch: fakeFetch,
+      enrichContext: (context) => ({ ...context, viewportWidth }),
+    });
+
+    recorder.record(makeImpressionEvent({ context: { userId: 'user-1' } }));
+    viewportWidth = 800;
+    recorder.record(makeImpressionEvent({ context: { userId: 'user-1' } }));
+    await recorder.flush();
+
+    const events = await recordedEvents(snapshots);
+    expect(events).toMatchObject([
+      { context: { userId: 'user-1', viewportWidth: 1200 } },
+      { context: { userId: 'user-1', viewportWidth: 800 } },
+    ]);
+  });
+
+  it('a hashed context field stays hashed when the caller supplies it as extra context', async () => {
+    const snapshots: Array<Promise<RequestSnapshot>> = [];
+    const fakeFetch: typeof fetch = async (input) => {
+      snapshots.push(snapshotRequest(input as Request));
+      return new Response();
+    };
+    const recorder = createRecorder({
+      fetch: fakeFetch,
+      hashContextFields: ['email'],
+      enrichContext: (context) => ({ ...context, email: 'user@example.com' }),
+    });
+
+    recorder.record(makeImpressionEvent());
+    await recorder.flush();
+
+    const events = await recordedEvents(snapshots);
+    expect(events).toMatchObject([
+      { context: { email: 'b4c9a289323b21a01c3e940f150eb9b8c542587f1abfd8f0e1cc1ffc5e475514' } },
+    ]);
+  });
+
   it('ignores record and flush calls after close', async () => {
     let fetchCalls = 0;
     const fakeFetch: typeof fetch = async () => {
